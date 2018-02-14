@@ -1,0 +1,574 @@
+using System;
+using System.Web;
+using System.Linq;
+using System.Collections.Generic;
+using System.Configuration;
+using System.Globalization;
+using ACompanyChange.;
+using ACompanyChange..Helpers;
+using ACompanyChange.DAL;
+using ACompanyChange.Wrappers;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Serialization;
+
+public static class JSONRequestHandler
+{
+	public static void ProcessRequest()
+	{
+		HttpContext.Current.Response.Expires = 0;
+		HttpContext.Current.Response.ContentType = "application/json";
+		var loggedUser = SessionWrapper.Current.LoggedUser;
+
+		if (loggedUser == null)
+		{
+			HttpContext.Current.Response.StatusCode = 401;
+			HttpContext.Current.Response.Write(Resources.Lang.misc_sessionExp);
+			HttpContext.Current.Response.End();
+		}
+		try
+		{
+			HttpContext.Current.Response.Write(getJSON(loggedUser));
+		}
+		catch (ACompanyException bEx)
+		{
+			HttpContext.Current.Response.StatusCode = 403;
+			HttpContext.Current.Response.Write(bEx.GetTranslatedMessage());
+		}
+		catch (Exception ex)
+		{
+			//var timeout = ex.Message.Substring(0, Math.Min(ex.Message.Length, 17)) == "Execution Timeout";
+			HttpContext.Current.Response.StatusCode = 500; // timeout ? 408 : 500;
+			HttpContext.Current.Response.Write(Misc.Lang("misc_err"));
+			Misc.LogError(ACompanyLogError.Severity.Error, ACompanyLogError.Application.ACompanyWeb, string.Join(", ", HttpContext.Current.Request.ServerVariables.GetValues("LOCAL_ADDR")), HttpContext.Current.Request.ServerVariables["REMOTE_ADDR"], HttpContext.Current.Request.Url.ToString() + "\n" + System.Uri.UnescapeDataString(HttpContext.Current.Request.Form.ToString()), loggedUser == null ? null : loggedUser.UserCustomer, null, loggedUser, ex.ToString());
+		}
+		HttpContext.Current.Response.End();
+	}
+
+	private static string getJSON(SessionUser loggedUser)
+	{
+		var queryStr = HttpContext.Current.Request.QueryString;
+		switch (queryStr["jsonRequest"])
+		{
+			case "dashardLoadCharts": return JSONDashard.GetUserCharts(loggedUser, queryStr["period"], queryStr["Action"] == "1");
+
+			case "help": return HttpContext.GetGlobalResourceObject("Lang", "help_" + queryStr["id"]).ToString().Replace("\r\n", "<br/>");
+
+			case "positionsMap": return JSONPosition.GetAllAssetsResourcesAndPositionsForMap(loggedUser, queryStr.ToNullableInt32("resourceId"), queryStr.ToNullableInt32("assetId"), queryStr["byAsset"] == "1" && string.IsNullOrEmpty(queryStr["resourceId"]), queryStr["today"] == "1", queryStr["notToday"] == "1", queryStr.ToNullableShort("lastXDays"), SessionCache.Current.GetStoredData<Dictionary<int, string>>(loggedUser, StoreDataObject.DataType.Attribute), SessionCache.Current.GetStoredData<Dictionary<int, string>>(loggedUser, StoreDataObject.DataType.Skill), SessionCache.Current.GetStoredData<Dictionary<int, string>>(loggedUser, StoreDataObject.DataType.TrackingDevice), SessionCache.Current.GetStoredData<List<ACompanyResourceExtra>>(loggedUser, StoreDataObject.DataType.Resource), SessionCache.Current.GetStoredData<List<ACompanyAssetExtra>>(loggedUser, StoreDataObject.DataType.Asset), SessionCache.Current.GetStoredData<List<ACompanyActivity>>(loggedUser, StoreDataObject.DataType.Activity));
+			case "position": return JSONPosition.GetPosition(loggedUser, queryStr.ToNullableInt32("resourceId"), queryStr.ToNullableInt32("assetId"), SessionCache.Current.GetStoredData<List<ACompanyResourceExtra>>(loggedUser, StoreDataObject.DataType.Resource), SessionCache.Current.GetStoredData<List<ACompanyAssetExtra>>(loggedUser, StoreDataObject.DataType.Asset));
+			case "positionETA": return JSONPosition.GetPositionETA(loggedUser, queryStr.ToNullableInt32("resourceId"), queryStr.ToNullableInt32("assetId"), new Coordinate(queryStr["lat"], queryStr["lng"]), SessionCache.Current.GetStoredData<List<ACompanyResourceExtra>>(loggedUser, StoreDataObject.DataType.Resource), SessionCache.Current.GetStoredData<List<ACompanyAssetExtra>>(loggedUser, StoreDataObject.DataType.Asset));
+			case "positionExtra": return JSONPosition.GetPositionExtraInfo(loggedUser, queryStr.ToNullableInt32("resourceId"), queryStr.ToNullableInt32("assetId"), queryStr.ToNullableInt32("ActionId"), string.IsNullOrEmpty(queryStr["eventId"]) ? (ACompanyResourcePosition.EventType?)null : (ACompanyResourcePosition.EventType)queryStr.ToInt32("eventId"), string.IsNullOrEmpty(queryStr["lat"]) ? null : new Coordinate(queryStr["lat"], queryStr["lng"]), queryStr.ToNullableInt32("input"), queryStr.ToNullableInt32("deviceId"), queryStr["tacho"] == "1");
+			case "positionHistory": return JSONPosition.GetAssetResourceHistory(loggedUser, queryStr.ToNullableInt32("resourceId"), queryStr.ToNullableInt32("assetId"), queryStr.ToDateTime("from"), string.IsNullOrEmpty(queryStr["to"]) ? queryStr.ToDateTime("from").AddDays(1) : queryStr.ToDateTime("to"), queryStr.ToInt32("level"));
+			case "positionHistoryGantt": return JSONPosition.GetAssetResourceHistoryGantt(loggedUser, queryStr.ToNullableInt32("resourceId"), queryStr.ToNullableInt32("assetId"), Convert.ToDateTime(queryStr["from"]), Convert.ToDateTime(queryStr["from"]).AddDays(1));
+			case "positionTachoGantt": return JSONPosition.GetResourceTachoGantt(loggedUser, queryStr.ToInt32("resourceId"), Convert.ToDateTime(queryStr["from"]), Convert.ToDateTime(queryStr["from"]).AddDays(1));
+			case "positionsNearest": return JSONPosition.GetNearestAssetsResourcesForMap(loggedUser, queryStr["byAsset"] == "1", queryStr.ToNullableInt32("groupId"), queryStr.ToListInt("attributes", '|'), new Coordinate(queryStr["lat"], queryStr["lng"]), SessionCache.Current.GetStoredData<List<ACompanyResourceExtra>>(loggedUser, StoreDataObject.DataType.Resource), SessionCache.Current.GetStoredData<List<ACompanyAssetExtra>>(loggedUser, StoreDataObject.DataType.Asset), SessionCache.Current.GetStoredData<List<ACompanyActivity>>(loggedUser, StoreDataObject.DataType.Activity));
+			case "positionHistoLoc": return JSONPosition.GetHistoryAtLocation(loggedUser, new Coordinate(queryStr["lat"], queryStr["lng"]), queryStr.ToNullableInt32("resourceGroupId"), queryStr.ToNullableInt32("assetGroupId"), Convert.ToDateTime(queryStr["from"]), Convert.ToDateTime(queryStr["to"]));
+			case "positionHistoComp": return JSONPosition.GetHistoryForCompare(loggedUser, queryStr.ToNullableInt32("resourceId"), queryStr.ToNullableInt32("assetId"), queryStr.ToDateTime("from"), string.IsNullOrEmpty(queryStr["to"]) ? queryStr.ToDateTime("from").AddDays(1) : queryStr.ToDateTime("to"), queryStr["color"]);
+			case "positionMatch": return JSONPosition.GetMatchingAssetRes(loggedUser, queryStr.ToNullableInt32("resourceId"), queryStr.ToNullableInt32("assetId"), SessionCache.Current.GetStoredData<List<ACompanyResourceExtra>>(loggedUser, StoreDataObject.DataType.Resource), SessionCache.Current.GetStoredData<List<ACompanyAssetExtra>>(loggedUser, StoreDataObject.DataType.Asset));
+			case "positionDelBehav": Tracking.DeleteInfringement(loggedUser, queryStr.ToInt64("rhId"), (ACompanyResourcePosition.EventType)queryStr.ToShort("eventId"), HttpContext.Current.Request.Form["reason"]); return "{}";
+
+			case "contactsAutoComplete": return JSONContact.GetContactsForAutoComplete(loggedUser, queryStr["term"], queryStr["postcode"] == "1");
+			case "contactsTable": return JSONContact.GetContactsTable(loggedUser, queryStr["sEcho"], queryStr["search"], queryStr.ToNullableInt32("group"), queryStr["children"] == "1", string.IsNullOrEmpty(queryStr["customFields"]) ? null : JsonConvert.DeserializeObject<Dictionary<int, string>>(queryStr["customFields"]), Convert.ToInt32(queryStr["iDisplayStart"]), Convert.ToInt32(queryStr["iDisplayLength"]), Convert.ToInt32(queryStr["iSortCol_0"]), queryStr["sSortDir_0"]);
+			case "contactsMap": return JSONContact.GetContactsForMap(loggedUser, queryStr.ToListInt("groupIds", '|'), new Coordinate(queryStr["unds"].Split(',')[0], queryStr["unds"].Split(',')[1]), new Coordinate(queryStr["unds"].Split(',')[2], queryStr["unds"].Split(',')[3]));
+			case "contactDetail": return JSONContact.GetContactDetailByIdOrRef(loggedUser, queryStr.ToInt32("contactId"), null, queryStr["withParentFlag"] == "1", queryStr["includeDeleted"] == "1");
+			case "contactExtra": return JSONContact.GetContactExtra(loggedUser, queryStr.ToInt32("contactId"), queryStr["currency"], queryStr["withAmountDue"] == "1");
+			case "contacNameExists": return JSONContact.ContactNameExists(loggedUser, queryStr["name"], queryStr.ToInt32("contactId"));
+			case "contactMove": Contact.MoveContact(loggedUser, ACompanyContact.GetById(loggedUser.UserCustomer, queryStr.ToInt32("contactId")), new Coordinate(queryStr["lat"], queryStr["lng"])); return "{}";
+			case "contactDelete": Contact.DeleteContact(loggedUser, queryStr.ToInt32("contactId")); return "{}";
+			case "contactDeletegroup": Contact.DeleteContactFromGroup(loggedUser, queryStr.ToInt32("groupId")); return "{}";
+			case "contactGroupTable": return JSONContact.GetContactGroupTable(loggedUser);
+			case "contactGroups": return JSONContact.GetContactGroups(loggedUser);
+			case "contactGroupsAutoComplete": return JSONContact.ContactGroupsAutoComplete(loggedUser);
+			case "contactGroupAddEdit": Contact.AddEditContactGroup(loggedUser, Convert.ToInt32(queryStr["contactGroupId"]), queryStr["contactGroupName"], queryStr["contactGroupIcon"]); return "{}";
+			case "contactGroupDelete": Contact.DeleteContactGroup(loggedUser, Convert.ToInt32(queryStr["contactGroupId"])); return "{}";
+			case "contactNoteSave": return Note.SaveContactNote(loggedUser, queryStr["customerUid"], queryStr.ToInt32("noteId"), (ACompanyContactNote.EntityType)queryStr.ToInt32("entityType"), queryStr.ToInt32("entityId"), queryStr.ToNullableInt32("contactId"), queryStr.ToGuid("noteContactUser"), queryStr["reference"], queryStr.ToInt32("noteType"), (ACompanyContactNote.Status)queryStr.ToInt32("noteStatus"), queryStr["noteSubject"], HttpContext.Current.Request.Form["noteText"], HttpContext.Current.Request.Form["completionText"], queryStr.ToInt32("ownerId"), queryStr["ownerName"], queryStr.ToNullableDateTime("noteDueDate"), JsonConvert.DeserializeObject<SerializableDictionary<int, string>>(HttpContext.Current.Request.Form["custFields"]), new AttachmentManager(HttpContext.Current.Request.Form["attachments"]), queryStr.ToListInt("worksheetIds", ','), string.IsNullOrEmpty(HttpContext.Current.Request.Form["wrkSheetAnswers"]) ? null : JsonConvert.DeserializeObject<List<Newtonsoft.Json.Linq.Actionject>>(HttpContext.Current.Request.Form["wrkSheetAnswers"])).ContactNoteId.ToString();
+			case "contactNoteDelete": Note.DeleteContactNote(loggedUser, queryStr.ToInt32("noteId")); return "{}";
+			case "contactNoteTypeTable": return JSONNote.GetContactNoteTypeTable(loggedUser);
+			case "contactNoteTypeSave": Note.SaveContactNoteType(loggedUser, queryStr.ToNullableInt32("noteTypeId"), queryStr["noteTypeName"], (ACompanyContactNoteType.WhenSendEmail)queryStr.ToInt32("statusNewEmail"), queryStr.ToNullableInt32("newEmailLetterId"), (ACompanyContactNoteType.WhenSendEmail)queryStr.ToInt32("statusCompleteEmail"), queryStr.ToNullableInt32("completeEmailLetterId"), queryStr.ToListInt("worksheetIds", ',')); return "{}";
+			case "contactNoteTypeDelete": Note.DeleteContactNoteType(loggedUser, queryStr.ToInt32("noteTypeId")); return "{}";
+			case "contactNoteTypeAutoComplete": return JSONNote.ContactNoteTypeAutoComplete(loggedUser);
+			case "contactNoteAutoComplete": return JSONNote.ContactNoteAutoComplete(loggedUser, queryStr.ToInt32("contactId"));
+			case "contactUserTable": return JSONContactUser.GetContactUserTable(loggedUser, queryStr.ToInt32("contactId"));
+			case "contactUserAutoComplete": return JSONContactUser.GetContactUserAutoComplete(loggedUser, queryStr.ToInt32("contactId"));
+			case "contactUserDetail": return JSONContactUser.GetContactUserDetail(loggedUser, queryStr.ToGuid("contactUserId"));
+			case "contactUserSave": ContactUser.SaveContactUser(loggedUser, queryStr.ToGuid("userId"), string.IsNullOrEmpty(queryStr["ownerId"]) ? loggedUser.UserId : queryStr.ToInt32("ownerId"), queryStr["isMainContact"] == "1", queryStr.ToInt32("contactId"), queryStr["first"], queryStr["name"], queryStr["email"], queryStr["title"], queryStr["position"], queryStr["department"], queryStr["phone"], queryStr["landline"], queryStr["invoiceRecipient"] == "1", queryStr.ToList<int>("tagIds", ','), queryStr["okingSite"] == "1", queryStr.ToNullableDateTime("pwdSentDate"), queryStr["canList"] == "1", queryStr["canok"] == "1", queryStr["canCancel"] == "1", queryStr["canTrack"] == "1", queryStr["canAlert"] == "1", queryStr["canActionCard"] == "1", queryStr["canProgress"] == "1", queryStr["cantSettings"] == "1", queryStr["cantTime"] == "1", queryStr["cantAmPm"] == "1", queryStr["landlineExtension"], queryStr["noMarketing"] == null ? (ol?)null : queryStr["noMarketing"] == "1"); return "{}";
+			case "contactUserDelete": ContactUser.DeleteContactUser(loggedUser, queryStr.ToGuid("userId")); return "{}";
+			case "contactUserEmailPwd": ContactUser.SendPassword(loggedUser, queryStr.ToGuid("userId")); return "{}";
+			case "contactUserCC": return JSONContactUser.GetContactUserWithCreditCard(loggedUser, queryStr.ToInt32("contactId"));
+			case "contactPriceTable": return JSONContact.GetContactPriceTable(loggedUser, queryStr.ToInt32("contactId"), ApplicationWrapper.Current.Currencies);
+			case "contactPriceSave": Contact.SavePriceListItem(loggedUser, (ACompanyContactPriceList.EntityType)queryStr.ToNullableInt32("entityType"), queryStr.ToInt32("entityId"), queryStr.ToInt32("contactId"), queryStr.ToNullableDouble("percent"), queryStr.ToNullableDouble("price"), queryStr.ToString("currency")); return "{}";
+			case "contactPriceDelete": Contact.DeletePriceListItem(loggedUser, (ACompanyContactPriceList.EntityType)queryStr.ToNullableInt32("entityType"), queryStr.ToInt32("entityId"), queryStr.ToInt32("contactId")); return "{}";
+			case "contactPriceDuplicate": Contact.DuplicatePriceList(loggedUser, queryStr.ToInt32("fromContactId"), queryStr.ToInt32("toContactId")); return "{}";
+			case "contactRecipients": return JSONContactUser.GetEmailRecipients(loggedUser, queryStr.ToInt32("contactId"), queryStr.ToNullableInt32("contact2Id"), queryStr.ToNullableInt32("contact3Id"), queryStr.ToNullableInt32("ActionId"), queryStr.ToNullableInt32("ActionGroupId"), queryStr["financial"] == "1");
+
+			case "noteTableServer": return JSONNote.GetNoteTableServer(loggedUser, queryStr["sEcho"], queryStr.ToListInt("entityTypes", '|').Select(x => (ACompanyContactNote.EntityType)x).ToList(), queryStr.ToNullableInt32("contactId"), queryStr["contactSearch"], queryStr["contactOnly"] == "1", queryStr["reference"], queryStr.ToNullableInt32("ownerId"), queryStr.ToListInt("tagId", ','), queryStr.ToListInt("types", ','), queryStr.ToNullableInt32("status"), queryStr.ToNullableDateTime("dueDate"), queryStr.ToNullableDateTime("createdFrom"), queryStr.ToNullableDateTime("createdTo"), queryStr["subject"], string.IsNullOrEmpty(queryStr["customFields"]) ? null : JsonConvert.DeserializeObject<Dictionary<int, string>>(queryStr["customFields"]), Convert.ToInt32(queryStr["iDisplayStart"]), Convert.ToInt32(queryStr["iDisplayLength"]), Convert.ToInt32(queryStr["iSortCol_0"]), queryStr["sSortDir_0"]);
+			case "noteTable": return JSONNote.GetNoteTable(loggedUser, (ACompanyContactNote.EntityType)queryStr.ToShort("entityType"), new List<int> { queryStr.ToInt32("entityId") });
+			case "noteTable4Action": return JSONNote.GetNoteTableByAction(loggedUser, queryStr.ToNullableInt32("ActionId"), queryStr.ToNullableInt32("ActionGroupId"));
+
+			case "okingSiteSave": Contact.SaveokingSite(loggedUser, queryStr.ToNullableInt32("siteId"), queryStr.ToNullableInt32("contactId"), queryStr["name"], queryStr["logo"], queryStr.ToListInt("ActionTypes", ','), queryStr.ToListInt("ActionColumns", ',').Select(x => (short)x).ToList(), queryStr["newUsers"] == "1", queryStr.ToNullableInt32("contactGroupId"), string.IsNullOrEmpty(queryStr["rights"]) ? (ACompanyContactUser.okingSiteParameters.UserRights?)null : (ACompanyContactUser.okingSiteParameters.UserRights)queryStr.ToInt32("rights")); return "{}";
+			case "okingSite": return JSONContact.GetokingSite(loggedUser, queryStr.ToNullableInt32("contactId"));
+			case "okingSiteExists": var site = ACompanyokingSite.GetByName(queryStr["name"]); return site == null || site.okingSiteContactId == queryStr.ToNullableInt32("contactId") ? "ok" : "error";
+
+			case "Actions": return JSONAction.GetActionsTable(loggedUser, queryStr["alloc"] == "1", queryStr["unalloc"] == "1", queryStr["actioned"] == "1", queryStr["unactioned"] == "1", queryStr.ToList<int>("status", '|'), string.IsNullOrEmpty(queryStr["clientStatus"]) ? (ACompanyActionClientStatus.Status?)null : (ACompanyActionClientStatus.Status)queryStr.ToShort("clientStatus"), queryStr.ToListInt("tagId", '|'), queryStr.ToNullableInt32("type"), queryStr.ToNullableInt32("cat"), queryStr.ToNullableInt32("contact"), queryStr.ToNullableInt32("soId"), queryStr.ToNullableInt32("ActionGroupId"), queryStr["search"], queryStr["reference"], queryStr["po"], queryStr.ToNullableInt32("resId"), queryStr.ToNullableInt32("resGroup"), queryStr.ToNullableInt32("assId"), queryStr.ToNullableInt32("assGroup"), queryStr.ToNullableInt32("stockItemId"), queryStr.ToNullableDateTime("from"), string.IsNullOrEmpty(queryStr["to"]) ? (DateTime?)null : queryStr.ToDateTime("to").AddDays(1), string.IsNullOrEmpty(queryStr["dateOption"]) ? ACompanyActionBase.DateFilterOption.Planned : (ACompanyActionBase.DateFilterOption)queryStr.ToShort("dateOption"), string.IsNullOrEmpty(queryStr["customFields"]) ? null : JsonConvert.DeserializeObject<Dictionary<int, string>>(queryStr["customFields"]), queryStr["actual"] == "1", queryStr["sEcho"], queryStr.ToInt32("iDisplayStart"), queryStr.ToInt32("iDisplayLength"), queryStr.ToInt32("iSortCol_0"), queryStr["sSortDir_0"], queryStr.ToNullableInt32("grpCat"), queryStr.ToNullableInt32("contractId"));
+			case "ActionCancelAll": Action.CancelActions(loggedUser, queryStr["alloc"] == "1", queryStr["unalloc"] == "1", queryStr["actioned"] == "1", queryStr["unactioned"] == "1", queryStr.ToList<int>("status", '|'), string.IsNullOrEmpty(queryStr["clientStatus"]) ? (ACompanyActionClientStatus.Status?)null : (ACompanyActionClientStatus.Status)queryStr.ToShort("clientStatus"), queryStr.ToListInt("tagId", '|'), queryStr.ToNullableInt32("type"), queryStr.ToNullableInt32("cat"), queryStr.ToNullableInt32("contact"), queryStr.ToNullableInt32("soId"), queryStr.ToNullableInt32("ActionGroupId"), queryStr["search"], queryStr["reference"], queryStr["po"], queryStr.ToNullableInt32("resId"), queryStr.ToNullableInt32("resGroup"), queryStr.ToNullableInt32("assId"), queryStr.ToNullableInt32("assGroup"), queryStr.ToNullableInt32("stockItemId"), queryStr.ToNullableDateTime("from"), string.IsNullOrEmpty(queryStr["to"]) ? (DateTime?)null : queryStr.ToDateTime("to").AddDays(1), string.IsNullOrEmpty(queryStr["dateOption"]) ? ACompanyActionBase.DateFilterOption.Planned : (ACompanyActionBase.DateFilterOption)queryStr.ToShort("dateOption"), string.IsNullOrEmpty(queryStr["customFields"]) ? null : JsonConvert.DeserializeObject<Dictionary<int, string>>(queryStr["customFields"]), queryStr["actual"] == "1", queryStr.ToNullableInt32("grpCat")); return "{}";
+			case "ActionDetail": return JSONAction.GetActionDetail(loggedUser, queryStr.ToInt32("ActionId"));
+			case "ActionsInGroup": return JSONAction.GetActionsInGroup(loggedUser, queryStr.ToInt32("ActionGroupId"));
+			case "ActionsScheduled": return JSONAction.GetActionsScheduled(loggedUser, queryStr.ToNullableInt32("resourceId"));
+			case "ActionsUnallocated": return JSONAction.GetActionsUnallocated(loggedUser);
+			case "ActionsForDay": return JSONAction.GetActionsForDay(loggedUser, queryStr.ToDateTime("dateMin"), queryStr["dateMax"] == null ? queryStr.ToDateTime("dateMin").AddDays(1) : queryStr.ToDateTime("dateMax"), queryStr.ToNullableInt32("resourceId"), queryStr.ToNullableInt32("assetId"), queryStr["actual"] == "1");
+			case "ActionsMap": return JSONAction.GetActionsForMap(loggedUser, string.IsNullOrEmpty(queryStr["dateMin"]) ? new DateTime(DateTime.Today.Year, DateTime.Today.Month, DateTime.Today.Day) : queryStr.ToDateTime("dateMin"), string.IsNullOrEmpty(queryStr["dateMax"]) ? new DateTime(DateTime.Today.Year, DateTime.Today.Month, DateTime.Today.Day) : queryStr.ToDateTime("dateMax"), string.IsNullOrEmpty(queryStr["dateOption"]) ? ACompanyActionBase.DateFilterOption.Planned : (ACompanyActionBase.DateFilterOption)queryStr.ToShort("dateOption"), queryStr.ToNullableInt32("resourceId"), queryStr.ToNullableInt32("assetId"), queryStr.ToList<int>("ActionTypeIds", '|'), queryStr.ToNullableInt32("ActionCatId"), queryStr["withUnallocated"] == "1", queryStr["withCompleted"] == "1");
+			case "ActionStatuses": return JSONAction.GetActionStatuses(loggedUser, queryStr.ToNullableInt32("ActionId"), queryStr.ToNullableInt32("ActionGroupId"), queryStr["canceled"] == "1");
+			case "ActionResult": return JSONAction.GetActionResult(loggedUser, queryStr.ToInt32("ActionId"));
+			case "ActionStatusSave": Action.SaveActionStatus(loggedUser, ACompanyActionStatus.OwnerType.User, loggedUser.UserCustomerId, loggedUser.UserName, queryStr.ToInt32("ActionId"), queryStr["isActionStatus"] == "1", TimeZoneInfo.ConvertTimeToUtc(queryStr.ToDateTime("date"), loggedUser.Timezone), Convert.ToInt32(queryStr["statusId"]), queryStr["comment"]); return "{}";
+			case "ActionStatusUpdate": Action.UpdateExistingActionStatusManually(loggedUser, queryStr.ToInt32("jsId"), queryStr.ToDateTime("date"), queryStr["comment"]); return "{}";
+			case "ActionClientStatuses": return JSONAction.GetActionClientStatuses(loggedUser, queryStr.ToNullableInt32("ActionId"), queryStr.ToNullableInt32("ActionGroupId"), queryStr["canceled"] == "1");
+			case "ActionAssistTimes": return JSONAction.GetActionAssistantTimes(loggedUser, queryStr.ToNullableInt32("ActionId"), queryStr.ToNullableInt32("ActionGroupId"));
+			case "ActionSwapAssit": Action.SwapAssistant(loggedUser, queryStr.ToInt32("ActionId"), queryStr.ToInt32("fromId"), queryStr.ToInt32("toId")); return "{}";
+			case "ActionQuickSave": Action.SaveQuickAction(loggedUser, queryStr.ToNullableInt32("ActionGroupId"), queryStr.ToNullableInt32("ActionTypeId"), string.IsNullOrEmpty(queryStr["lat"]) ? null : new Coordinate(queryStr["lat"], queryStr["lng"]), queryStr["name"], queryStr.ToNullableInt32("contactId"), queryStr.ToNullableInt32("resourceId"), queryStr.ToNullableInt32("assetId"), queryStr["asap"] == "1", queryStr.ToDateTime("date"), queryStr["note"], queryStr["purchaseOrder"]); return "{}";
+			case "ActionSlotOk": var slotOk = Action.ActionCanBeScheduledAtThisTime(loggedUser.UserCustomer, queryStr.ToNullableInt32("resourceId") != null ? SessionCache.Current.GetStoredData<List<ACompanyResourceExtra>>(loggedUser, StoreDataObject.DataType.Resource).Find(x => x.ResourceId == queryStr.ToInt32("resourceId")) : null, queryStr.ToNullableInt32("assetId") != null ? SessionCache.Current.GetStoredData<List<ACompanyAssetExtra>>(loggedUser, StoreDataObject.DataType.Asset).Find(x => x.AssetId == queryStr.ToInt32("assetId")) : null, TimeZoneInfo.ConvertTimeToUtc(queryStr.ToDateTime("start"), loggedUser.Timezone), queryStr.ToInt32("duration"), new Coordinate(queryStr["startLat"], queryStr["startLng"]), new Coordinate(queryStr["endLat"], queryStr["endLng"]), queryStr.ToNullableInt32("Actionid"), out var inHoliday); return JsonConvert.SerializeObject(new { Error = slotOk ? null : (inHoliday ? Resources.Lang.Action_slotNotOk2 : Resources.Lang.Action_slotNotOk) });
+			case "ActionSchedule": Action.ScheduleAction(loggedUser, ACompanyActionStatus.OwnerType.User, loggedUser.UserId, loggedUser.UserName, queryStr.ToInt32("ActionId"), queryStr.ToNullableInt32("resourceId"), queryStr.ToNullableInt32("assetId"), string.IsNullOrEmpty(queryStr["start"]) ? (DateTime?)null : Convert.ToDateTime(queryStr["start"]), Convert.ToInt32(queryStr["duration"]), null, null, queryStr["wholeSerie"] == "1"); return "{}";
+			case "ActionUnschedule": Action.UnscheduleAction(loggedUser, ACompanyActionStatus.OwnerType.User, loggedUser.UserId, loggedUser.UserName, queryStr.ToInt32("ActionId"), queryStr.ToNullableInt32("categoryId")); return "{}";
+			case "ActionScheduleBatch": Action.ScheduleBatch(loggedUser, queryStr["byResource"] == "1" ? Scheduling.SchedulingType.ByResource : Scheduling.SchedulingType.ByAsset, queryStr.ToDateTime("minDate"), queryStr.ToDateTime("maxDate"), queryStr.ToNullableInt32("resourceId"), queryStr.ToNullableInt32("resourceGroupId"), queryStr.ToNullableInt32("assetId"), queryStr.ToNullableInt32("assetGroupId"), queryStr.ToListInt("skills", '|'), queryStr.ToListInt("attributes", '|'), queryStr["alloc"] == "1", queryStr["unalloc"] == "1", queryStr["actioned"] == "1", queryStr["unactioned"] == "1", queryStr.ToList<int>("status", '|'), string.IsNullOrEmpty(queryStr["clientStatus"]) ? (ACompanyActionClientStatus.Status?)null : (ACompanyActionClientStatus.Status)queryStr.ToShort("clientStatus"), queryStr.ToListInt("tagId", '|'), queryStr.ToNullableInt32("type"), queryStr.ToNullableInt32("cat"), queryStr.ToNullableInt32("contact"), queryStr.ToNullableInt32("soId"), queryStr.ToNullableInt32("ActionGroupId"), queryStr["search"], queryStr["reference"], queryStr["po"], queryStr.ToNullableInt32("resId"), queryStr.ToNullableInt32("resGroup"), queryStr.ToNullableInt32("assId"), queryStr.ToNullableInt32("assGroup"), queryStr.ToNullableInt32("stockItemId"), queryStr.ToNullableDateTime("from"), string.IsNullOrEmpty(queryStr["to"]) ? (DateTime?)null : queryStr.ToDateTime("to").AddDays(1), string.IsNullOrEmpty(queryStr["dateOption"]) ? ACompanyActionBase.DateFilterOption.Planned : (ACompanyActionBase.DateFilterOption)queryStr.ToShort("dateOption"), string.IsNullOrEmpty(queryStr["customFields"]) ? null : JsonConvert.DeserializeObject<Dictionary<int, string>>(queryStr["customFields"]), queryStr["actual"] == "1", SessionCache.Current.GetStoredData<List<ACompanyResourceExtra>>(loggedUser, StoreDataObject.DataType.Resource), SessionCache.Current.GetStoredData<List<ACompanyAssetExtra>>(loggedUser, StoreDataObject.DataType.Asset), queryStr.ToNullableInt32("grpCat")); return "{}";
+			case "ActionMoveGroup": Action.MoveActionToGroup(loggedUser, queryStr.ToInt32("ActionId"), queryStr.ToInt32("ActionGroupId"), queryStr.ToNullableInt32("soId")); return "{}";
+			case "ActionUngroup": Action.MoveActionOutOfGroup(loggedUser, queryStr.ToInt32("ActionId")); return "{}";
+			case "ActionMoveCat": Action.MoveActionToCategory(loggedUser, queryStr.ToInt32("ActionId"), queryStr.ToInt32("categoryId")); return "{}";
+			case "ActionCancel": Action.CancelAction(loggedUser, ACompanyActionStatus.OwnerType.User, loggedUser.UserId, loggedUser.UserName, queryStr.ToInt32("ActionId"), HttpContext.Current.Request.Form["reason"]); return "{}";
+			case "ActionDeleteRecSerie": Recurrence.DeleteRecurringActions(loggedUser, null, Convert.ToInt32(queryStr["recurrenceId"]), true); return "{}";
+			case "ActionRefAutoComplete": return JSONAction.GetActionRefForAutoComplete(loggedUser, queryStr["term"], queryStr["notInGroup"] == "1");
+			case "ActionGroupAdd": var group = Action.SaveActionGroup(loggedUser, null, null, null, queryStr.ToInt32("contactId"), null, null, queryStr.ToNullableInt32("soId"), queryStr.ToNullableInt32("categoryId")); return "{ \"Id\":" + group.ActionGroupId + "}";
+			case "ActionGroupDetail": return JSONAction.GetActionGroupDetail(loggedUser, queryStr.ToNullableInt32("ActionGroupId"), queryStr["ActionGroupReference"]);
+			case "ActionGroupsAutoComplete": return JSONAction.GetActionGroupsForAutoComplete(loggedUser, queryStr["term"]);
+			case "ActionSaveBackOfficeNote": Action.UpdateActionBackOfficeNotes(loggedUser, queryStr.ToInt32("ActionId"), queryStr["actioned"] == "1", string.IsNullOrEmpty(queryStr["notes"]) ? null : queryStr["notes"]); return "{}";
+			case "ActionStockItems": return JSONAction.GetActionStockItems(loggedUser, queryStr.ToInt32("ActionId"));
+			case "ActionRestrictions": return JSONAction.GetActionRestrictions(loggedUser, queryStr.ToInt32("ActionId"), queryStr.ToListInt("rules", '|').Select(x => (RestrictionRules)x).ToList());
+			case "ActionRestrictionText": return JSONAction.GetActionRestrictionPlainText(loggedUser, new ACompanyRestriction(loggedUser.UserCustomer, null, null, (RestrictionRules)Convert.ToInt16(queryStr["rule"]), string.IsNullOrEmpty(queryStr["date"]) ? (DateTime?)null : TimeZoneInfo.ConvertTimeToUtc(Convert.ToDateTime(queryStr["date"]), loggedUser.Timezone), string.IsNullOrEmpty(queryStr["time"]) ? (TimeSpan?)null : new TimeSpan(0, Convert.ToInt32(queryStr["time"]), 0), null, queryStr.ToNullableInt32("relativeMinutes"), queryStr.ToNullableInt32("entityId"), string.IsNullOrEmpty(queryStr["entityName"]) ? null : queryStr["entityName"], 0, loggedUser.Timezone));
+			case "ActionFindSlots": return JSONAction.FindBestSlot(loggedUser, queryStr.ToNullableInt32("ActionId"), queryStr.ToNullableInt32("duration"), string.IsNullOrEmpty(queryStr["lat"]) ? null : new Coordinate(queryStr["lat"], queryStr["lng"]), queryStr["search"], queryStr.ToDateTime("minDate"), queryStr.ToDateTime("maxDate"), queryStr.ToNullableInt32("resourceId"), queryStr.ToNullableInt32("resourceGroupId"), queryStr.ToNullableInt32("assetId"), queryStr.ToNullableInt32("assetGroupId"), queryStr.ToListInt("skills", '|'), queryStr.ToListInt("attributes", '|'), string.IsNullOrEmpty(queryStr["mintime"]) ? (TimeSpan?)null : TimeZoneInfo.ConvertTimeToUtc(Convert.ToDateTime(queryStr["mintime"]), loggedUser.Timezone).TimeOfDay, string.IsNullOrEmpty(queryStr["maxTime"]) ? (TimeSpan?)null : TimeZoneInfo.ConvertTimeToUtc(Convert.ToDateTime(queryStr["maxTime"]), loggedUser.Timezone).TimeOfDay, SessionCache.Current.GetStoredData<List<ACompanyResourceExtra>>(loggedUser, StoreDataObject.DataType.Resource), SessionCache.Current.GetStoredData<List<ACompanyAssetExtra>>(loggedUser, StoreDataObject.DataType.Asset));
+			case "ActionDuplicate": var dupActions = Action.DuplicateAction(loggedUser, queryStr.ToInt32("ActionId"), queryStr["reference"], queryStr["groupRef"], queryStr["moveOriginal"] == "1", queryStr.ToInt32("count")); return "{\"ids\":[" + string.Join(",", dupActions.Select(x => x.ActionId)) + "]}";
+			case "ActionRecurrenceText": return Recurrence.RecurrenceToString(loggedUser, HttpContext.Current.Request.Form[0], false);
+			case "ActionTypeTable": return JSONActionType.GetActionTypeTable(loggedUser);
+			case "ActionTypeAutoComplete": return JSONActionType.GetActionTypeForAutoComplete(loggedUser.UserCustomer);
+			case "ActionTypeResultAutoComplete": return JSONActionType.GetActionTypeResultForAutoComplete(loggedUser.UserCustomer, queryStr.ToInt32("ActionTypeId"), queryStr["isPositive"] == "1");
+			case "ActionTypeSave": var ActionType = ActionType.SaveActionType(loggedUser, queryStr.ToInt32("ActionTypeId"), queryStr.ToNullableInt32("nominalId"), queryStr.ToNullableInt32("departmentId"), queryStr["ActionTypeRef"], queryStr["ActionTypeName"], queryStr["ActionCardName"], queryStr.ToInt32("defaultDuration"), queryStr["divideDuration"] == "1", queryStr["onACompanyDataReport"] == "1", queryStr.ToListInt("worksheetIds", ','), string.IsNullOrEmpty(queryStr["stockTypeIds"]) ? new List<int>() : queryStr["stockTypeIds"].Split(',').Select(x => Int32.Parse(x)).ToList(), string.IsNullOrEmpty(queryStr["stockItemMovement"]) ? ACompanyActionStock.MovementType.NoMovement : (ACompanyActionStock.MovementType)Convert.ToInt16(queryStr["stockItemMovement"]), new List<string>(queryStr["ActionTypePositive"].Split('-')), new List<string>(queryStr["ActionTypeNegative"].Split('-')), queryStr.ToNullableInt32("defaultCatId"), queryStr.ToNullableInt32("defaultCardId"), JsonConvert.DeserializeObject<ACompanyActionType.DeviceOptions>(HttpContext.Current.Request.Form["deviceOptions"]), HttpContext.Current.Request.Form["restrictions"], HttpContext.Current.Request.Form["restrictionsDeleted"], queryStr["forceOrderNumber"] == "1"); SessionCache.Current.ResetStoredData(StoreDataObject.DataType.ActionType); return "{\"id\":" + ActionType.ActionTypeId + "}";
+			case "ActionTypeDelete": ActionType.DeleteActionType(loggedUser, queryStr.ToInt32("ActionTypeId")); SessionCache.Current.ResetStoredData(StoreDataObject.DataType.ActionType); return "{}";
+			case "ActionTypeDupli": var ActionTypeDupli = ActionType.DuplicateActionType(loggedUser, queryStr.ToInt32("ActionTypeId"), queryStr["name"]); SessionCache.Current.ResetStoredData(StoreDataObject.DataType.ActionType); return "{\"id\":" + ActionTypeDupli.ActionTypeId + "}";
+			case "ActionTypeReportAutoComplete": return JSONReport.GetPrivateReportsList(loggedUser, queryStr.ToInt32("ActionTypeId"), queryStr["reportCat"]);
+			case "ActionTypeInvoiceDefaultDelete": ActionType.DeleteInvoiceDefault(loggedUser, queryStr.ToInt32("ActionTypeId"), queryStr.ToInt32("invoiceDefaultId")); return "{}";
+			case "ActionTypeInvoiceDefaultAdd": ActionType.AddInvoiceDefault(loggedUser, queryStr.ToInt32("ActionTypeId"), queryStr.ToInt32("invoiceDefaultId")); return "{}";
+			case "ActionCardAutoTable": return JSONActionType.GetReportAutoTable(loggedUser, queryStr.ToInt32("ActionTypeId"));
+			case "ActionCardAutoDetail": return JSONActionType.GetReportAutoDetail(loggedUser, queryStr.ToInt32("id"));
+			case "ActionCardAutoSave": ReportAutoSend.SaveReportAuto(loggedUser, queryStr.ToNullableInt32("id"), queryStr.ToInt32("ActionTypeId"), (ACompanyReportAutoSend.AutoAction)queryStr.ToShort("action"), queryStr["reportCategory"], queryStr.ToInt32("reportId"), JsonConvert.DeserializeObject<SerializableDictionary<string, string>>(HttpContext.Current.Request.Form["param"]), (ACompanyUserReport.Format)queryStr.ToInt32("format"), (ACompanyActionBase.ActionStatus)queryStr.ToShort("ActionStatus"), queryStr.ToShort("delay"), queryStr["sendIfIssue"] == "1", string.IsNullOrEmpty(queryStr["from"]) ? null : queryStr["from"], string.IsNullOrEmpty(queryStr["to"]) ? null : queryStr["to"].Split(',').ToList(), string.IsNullOrEmpty(queryStr["bcc"]) ? null : queryStr["bcc"].Split(',').ToList(), HttpContext.Current.Request.Form["subject"], queryStr.ToNullableInt32("letterId"), HttpContext.Current.Request.Form["catEmails"] == null ? null : JsonConvert.DeserializeObject<SerializableDictionary<int, string>>(HttpContext.Current.Request.Form["catEmails"]), queryStr.ToNullableInt32("personTag"), queryStr["tryParent"] == "1"); return "{}";
+			case "ActionCardAutoDelete": ReportAutoSend.DeleteReportAuto(loggedUser, queryStr.ToInt32("id")); return "{}";
+			case "ActionCategorySave": Action.SaveActionCategory(loggedUser, queryStr.ToInt32("ActionCategoryId"), queryStr["ActionCategoryName"], (ACompanyActionCategory.Visibility)queryStr.ToInt32("ActionCategoryVisibility")); SessionCache.Current.ResetStoredData(StoreDataObject.DataType.ActionCategory); return "{}";
+			case "ActionCategoryReset": SessionCache.Current.ResetStoredData(StoreDataObject.DataType.ActionCategory); return "{}";
+			case "ActionCategoryDelete": Action.DeleteActionCategory(loggedUser, queryStr.ToInt32("ActionCategoryId")); SessionCache.Current.ResetStoredData(StoreDataObject.DataType.ActionCategory); return "{}";
+			case "ActionCategoryTable": return JSONAction.GetActionCategoryTable(loggedUser);
+			case "ActionCategoryAutoComplete": var allCat = SessionCache.Current.GetStoredData<List<ACompanyActionCategory>>(loggedUser, StoreDataObject.DataType.ActionCategory).Select(x => new { id = x.ActionCategoryId, label = x.ActionCategoryName }).ToList(); allCat.Insert(0, new { id = 0, label = Misc.Lang("Action_noCat") }); return JsonConvert.SerializeObject(allCat);
+			case "ActionAllDocs": return JSONAttachment.GetAttachment4Action(loggedUser, queryStr.ToNullableInt32("ActionId"), queryStr.ToNullableInt32("ActionGroupId"));
+			case "ActionAdd2SalesOp": Action.AddToSalesOpportunity(loggedUser, queryStr.ToInt32("ActionId"), queryStr.ToInt32("soId")); return "{}";
+
+			case "resourcesAutoComplete": return JSONResource.GetResourcesForAutoComplete(loggedUser, queryStr.ToNullableInt32("groupId"), queryStr["only4Schedule"] == "1", queryStr["only4Tracking"] == "1", queryStr["notAssociated"] == "1");
+			case "resourceAsset": return JSONResource.GetResourceFixedAsset(loggedUser, queryStr.ToInt32("resourceId"), SessionCache.Current.GetStoredData<List<ACompanyAssetExtra>>(loggedUser, StoreDataObject.DataType.Asset));
+			case "resourcesAssistants": return JSONResource.GetResourceAssistants(loggedUser, queryStr.ToNullableInt32("resourceId"));
+			case "resourceTable": return JSONResource.GetResourcesTable(loggedUser);
+			case "resourceDelete": Resource.DeleteResource(loggedUser, queryStr.ToInt32("resourceId"), queryStr["alsoWebUser"] == "1"); if (queryStr["alsoWebUser"] == "1") ReportServiceWrapper.DeleteAllSubscription(loggedUser, null, queryStr.ToInt32("resourceId")); SessionCache.Current.ResetStoredData(StoreDataObject.DataType.Resource); return "{}";
+			case "resourceDetail": return JSONResource.GetResourcesDetail(loggedUser, Convert.ToInt32(queryStr["resourceId"]));
+			case "resourceGroups": return JSONResource.GetResourceGroups(loggedUser);
+			case "resourcesGroupAutoComplete": return SessionCache.Current.GetStoredDataJson(loggedUser, StoreDataObject.DataType.ResourceGroup);
+			case "resourceGroupTable": return JSONResource.GetResourceGroupTable(loggedUser);
+			case "resourceGroupAddEdit": Resource.AddEditResourceGroup(loggedUser, queryStr.ToInt32("resourceGroupId"), queryStr["resourceGroupName"]); SessionCache.Current.ResetStoredData(StoreDataObject.DataType.ResourceGroup); return "{}";
+			case "resourceGroupDelete": Resource.DeleteResourceGroup(loggedUser, queryStr.ToInt32("resourceGroupId")); SessionCache.Current.ResetStoredData(StoreDataObject.DataType.ResourceGroup); return "{}";
+
+			case "holidayTable": return JSONHolidays.GetHolidayTable(loggedUser, queryStr.ToDateTime("mindate"), queryStr.ToDateTime("maxDate"), queryStr.ToNullableInt32("resourceId"));
+			case "holidaySave": Holidays.SaveHoliday(loggedUser, queryStr.ToNullableInt32("holidayId"), queryStr.ToNullableInt32("typeId"), queryStr.ToNullableInt32("resourceId"), Convert.ToDateTime(queryStr["start"]), Convert.ToDateTime(queryStr["stop"]), queryStr.ToDouble("days"), queryStr["reason"], queryStr["paid"] == "1", (ACompanyResourceHoliday.Status)queryStr.ToShort("status"), HttpContext.Current.Request.Form["comment"]); return "{}";
+			case "holidayDelete": Holidays.DeleteHoliday(loggedUser, Convert.ToInt32(queryStr["holidayId"])); return "{}";
+			case "holidaySched": return JSONHolidays.GetHolidays4Schedule(loggedUser, queryStr.ToDateTime("mindate"), queryStr.ToDateTime("maxDate"), SessionCache.Current.GetStoredData<List<ACompanyResourceExtra>>(loggedUser, StoreDataObject.DataType.Resource));
+			case "holidayTypeAutoComplete": return JSONHolidays.HolidayTypeAutoComplete(loggedUser);
+			case "holidayTypeTable": return JSONHolidays.GetHolidayTypeTable(loggedUser);
+			case "holidayTypeSave": Holidays.SaveHolidayType(loggedUser, queryStr.ToNullableInt32("typeId"), queryStr["name"], queryStr["color"]); return "{}";
+			case "holidayTypeDelete": Holidays.DeleteHolidayType(loggedUser, Convert.ToInt32(queryStr["typeId"])); return "{}";
+
+			case "behaviourLoad": return Behaviour.GetBehaviour(loggedUser, queryStr.ToNullableInt32("groupId"));
+			case "behaviourSave": Behaviour.SaveBehaviour(loggedUser, queryStr.ToInt32("behaviourId"), queryStr.ToShort("idlingMin"), queryStr.ToShort("idlingMax"), queryStr.ToShort("idlingFactor"), queryStr.ToShort("speedMin"), queryStr.ToShort("speedMax"), queryStr.ToShort("speedFactor"), queryStr.ToShort("accelerationMin"), queryStr.ToShort("accelerationMax"), queryStr.ToShort("accelerationFactor"), queryStr.ToShort("brakingMin"), queryStr.ToShort("brakingMax"), queryStr.ToShort("brakingFactor"), queryStr.ToShort("corneringMin"), queryStr.ToShort("corneringMax"), queryStr.ToShort("corneringFactor"), queryStr.ToShort("RPMMin"), queryStr.ToShort("RPMMax"), queryStr.ToShort("RPMFactor")); return "{}";
+			case "behaviourCreate": Behaviour.InsertDefaultBehaviour(loggedUser, queryStr.ToNullableInt32("groupId")); return "{}";
+			case "behaviourDelete": Behaviour.DeleteBehaviour(loggedUser, queryStr.ToInt32("behaviourId")); return "{}";
+
+			case "messagesTable": return JSONMessage.GetMessageTable(loggedUser, queryStr, queryStr["sEcho"], Convert.ToInt32(queryStr["iDisplayStart"]), Convert.ToInt32(queryStr["iDisplayLength"]), Convert.ToInt32(queryStr["iSortCol_0"]), queryStr["sSortDir_0"]);
+			case "messageAllTable": return JSONMessage.GetMessageTable(loggedUser, (ACompanyMessage.EntityType)queryStr.ToShort("entityType"), queryStr.ToNullableInt32("entityId"), queryStr.ToNullableInt32("ActionGroupId"), queryStr["sEcho"], Convert.ToInt32(queryStr["iDisplayStart"]), Convert.ToInt32(queryStr["iDisplayLength"]), Convert.ToInt32(queryStr["iSortCol_0"]), queryStr["sSortDir_0"]);
+			case "messageRead": Message.ReadMessage(loggedUser, queryStr.ToInt32("messageId")); return "{}";
+			case "messageDelete": Message.DeleteMessage(loggedUser, queryStr.ToInt32("messageId")); return "{}";
+			case "messageDetail": return JSONMessage.GetMessageDetail(loggedUser, queryStr.ToInt32("messageId"));
+			case "messageRecipAutoComplete": return JSONMessage.ConstructRecipientListMerged(loggedUser, true, true);
+
+			case "usersTable": return JSONUser.GetUsersTable(loggedUser);
+			case "userAutoComplete": return JSONUser.GetUsersForAutoComplete(loggedUser);
+			case "userDelete": ReportServiceWrapper.DeleteAllSubscription(loggedUser, queryStr.ToInt32("userId")); User.DeleteUser(loggedUser, queryStr.ToInt32("userId")); return "{}";
+			case "userRestrictions": return JSONUser.GetRestrictions(loggedUser, queryStr.ToInt32("userId"));
+			case "userRestrictionsChange": return JSONUser.UpdateRestrictions(loggedUser, queryStr.ToInt32("userId"), queryStr.ToInt32("restrictionId"), Convert.ToInt32(queryStr["featureType"]), Convert.ToInt32(queryStr["featureId"]));
+			case "userNotification": return JSONUser.GetCurrentNotifications(loggedUser);
+			case "userReportTable": return JSONUser.GetUserReportsTable(loggedUser);
+			case "userReportDelete": ReportServiceWrapper.DeleteSubscription(loggedUser, queryStr["reportId"]); return "{}";
+			case "userSignatureSave": User.SaveSignature(loggedUser, HttpContext.Current.Request.Form[0]); return "{}";
+			case "userSignatureDelete": User.DeleteSignature(loggedUser); return "{}";
+			case "userTOTPSave": User.SaveTOTP(loggedUser, queryStr["key"]); return "{}";
+			case "userTOTPDelete": User.DeleteTOTP(loggedUser, queryStr.ToNullableInt32("userId")); return "{}";
+			case "userSites": return JSONUser.GetUsersMultiSites(loggedUser);
+			case "userSwitchSite":
+				var newUser = User.SwitchSite(loggedUser, queryStr.ToInt32("customerId"), queryStr.ToInt32("userId"));
+				SessionWrapper.Current.LoggedUser = newUser;
+				Web.SaveSessionCookie("SessionToken", newUser.SessionToken);
+				return "{}";
+			case "parameterSave": User.SaveParameter(loggedUser, queryStr["userLevel"] == "1", Convert.ToInt32(queryStr["parameterId"]), queryStr["parameterValue"], queryStr["defaultValue"]); return "{}";
+			case "parameterVerifEmail": return User.SendEmailAddressVerificationEmail(loggedUser, queryStr["user"] == "1");
+			case "roleActionUpdate": User.UpdateRoleAction(loggedUser, queryStr["isAdd"] == "1", queryStr.ToInt32("roleId"), queryStr.ToInt32("actionId")); return "{}";
+			case "roleSave": User.SaveUserRole(loggedUser, queryStr.ToInt32("roleId"), queryStr["roleName"]); return "{}";
+			case "roleDelete": User.DeleteUserRole(loggedUser, queryStr.ToInt32("roleId")); return "{}";
+			case "roleGet4Group": return JSONUser.GetRoleForResourceGroup(loggedUser, queryStr.ToInt32("resourceGroupId"));
+			case "roleAddRemoveGroup": User.AddOrRemoveRoleFromResourceGroup(loggedUser, queryStr.ToInt32("resourceGroupId"), queryStr.ToInt32("entryId"), queryStr["isAdd"] == "1"); return "{}";
+			case "roleSend2Group": User.SendAddressokToDevices(loggedUser.UserCustomer, loggedUser.UserId, null, queryStr.ToInt32("resourceGroupId"), null); return "{}";
+
+			case "mapLoadInitData": return JSONMap.LoadInitData(loggedUser, ConfigurationManager.AppSettings["JavascriptVersion"], ConfigurationManager.AppSettings["JavascriptSubVersion"], ConfigurationManager.AppSettings["StaticURL"], ConfigurationManager.AppSettings["CdnURL"], ConfigurationManager.AppSettings["NodeURL"], Convert.ToInt32(queryStr["mapWidth"]), Convert.ToInt32(queryStr["mapHeight"]), SessionCache.Current.GetStoredData<Dictionary<int, string>>(loggedUser, StoreDataObject.DataType.Attribute), SessionCache.Current.GetStoredData<Dictionary<int, string>>(loggedUser, StoreDataObject.DataType.Skill), ApplicationWrapper.Current.Currencies);
+
+			case "addressFromStaticPoint": return JSONGeocoding.GetAddressFromStaticPoint(loggedUser, new Coordinate(queryStr["lat"], queryStr["lng"]), Resources.Lang.misc_mapLang);
+			case "addressFromMovingPoint": return JSONGeocoding.GetAddressFromMovingPoint(loggedUser, new Coordinate(queryStr["lat"], queryStr["lng"]), queryStr["heading"] == "undefined" ? (int?)null : Convert.ToInt32(queryStr["heading"]), Convert.ToDouble(queryStr["speed"], CultureInfo.CreateSpecificCulture("en-gb")), (ACompanyAsset.VehicleType)Convert.ToInt32(queryStr["vehicleType"]), Resources.Lang.misc_mapLang);
+
+			case "activityGet4Group": return JSONActivity.GetActivitiesForGroup(loggedUser, queryStr.ToInt32("resourceGroupId"));
+			case "activitySend": Activity.SendActivities(loggedUser, queryStr.ToInt32("resourceGroupId")); return "{}";
+			case "activityDelete": Activity.DeleteActivity(loggedUser, Convert.ToInt32(queryStr["activityId"])); SessionCache.Current.ResetStoredData(StoreDataObject.DataType.Activity); return "{}";
+			case "activitySave": var jsonActivity = JsonConvert.SerializeObject(Activity.SaveActivity(loggedUser, queryStr.ToInt32("activityId"), queryStr.ToInt32("resourceGroupId"), queryStr["activityName"], queryStr["activityColor"], queryStr["activityIsWorking"] == "1")); SessionCache.Current.ResetStoredData(StoreDataObject.DataType.Activity); return jsonActivity;
+			case "activityGantt": return JSONActivity.GetActivityGantt(loggedUser, queryStr.ToInt32("resourceId"), Convert.ToDateTime(queryStr["from"]), Convert.ToDateTime(queryStr["from"]).AddDays(1));
+
+			case "phoneokGet4Group": return JSONPhoneok.GetPhoneokForGroup(loggedUser, queryStr.ToInt32("resourceGroupId"));
+			case "phoneokSend2Group": Phoneok.SendPhoneokToGroup(loggedUser, queryStr.ToInt32("resourceGroupId")); return "{}";
+			case "phoneokDelete": Phoneok.DeleteEntry(loggedUser, queryStr.ToInt32("phoneokId")); return "{}";
+			case "phoneokSave": return JSONPhoneok.SaveEntry(loggedUser, queryStr.ToInt32("phoneokId"), queryStr["name"], queryStr["mobile"]);
+			case "phoneokAddRemoveGroup": Phoneok.AddOrRemoveFromResourceGroup(loggedUser, queryStr.ToInt32("resourceGroupId"), queryStr.ToInt32("entryId"), queryStr["isAdd"] == "1"); return "{}";
+
+			case "assetAdminTable": return JSONAsset.GetAssetAdminTable(loggedUser);
+			case "assetDetail": return JSONAsset.GetAssetDetail(loggedUser, queryStr.ToInt32("assetId"), SessionCache.Current.GetStoredData<List<ACompanyResourceExtra>>(loggedUser, StoreDataObject.DataType.Resource));
+			case "assetAutoComplete": return JSONAsset.GetAssetForAutoComplete(loggedUser, queryStr.ToNullableInt32("groupId"), queryStr["only4Schedule"] == "1", queryStr["only4Tracking"] == "1");
+			case "assetResource": return JSONAsset.GetAssetFixedResource(loggedUser, queryStr.ToInt32("assetId"), SessionCache.Current.GetStoredData<List<ACompanyAssetExtra>>(loggedUser, StoreDataObject.DataType.Asset), SessionCache.Current.GetStoredData<List<ACompanyResourceExtra>>(loggedUser, StoreDataObject.DataType.Resource));
+			case "assetTable": return JSONAsset.GetAssetTable(loggedUser);
+			case "assetDelete": Asset.DeleteAsset(loggedUser, queryStr.ToInt32("assetId")); SessionCache.Current.ResetStoredData(StoreDataObject.DataType.Asset); return "{}";
+			case "assetAddEdit": Asset.SaveAsset(loggedUser, queryStr.ToInt32("assetId"), (ACompanyAsset.Type)queryStr.ToShort("assetType"), queryStr["trackingDeviceId"] == "0" ? (int?)null : Convert.ToInt32(queryStr["trackingDeviceId"]), queryStr["resourceId"] == "0" || queryStr["resourceId"] == "null" ? (int?)null : Convert.ToInt32(queryStr["resourceId"]), queryStr.ToInt32("groupId"), (ACompanyAsset.VehicleType)queryStr.ToInt32("vehicleType"), queryStr["registration"], queryStr["reference"], queryStr["make"], queryStr["model"], queryStr.ToNullableShort("year"), queryStr["icon"], queryStr["forSchedule"] == "1", queryStr.ToDouble("costPerKm"), queryStr["costCurrencyKm"], queryStr.ToDouble("costPerDay"), queryStr["costCurrencyDay"], queryStr.ToNullableShort("co2"), queryStr.ToNullableDouble("co2Litre"), queryStr.ToNullableShort("maxRPM"), queryStr.ToNullableDouble("idlingFuelRate"), queryStr["defectGroups"] == "" ? new List<int>() : queryStr["defectGroups"].Split('|').Select(x => int.Parse(x)).ToList(), queryStr["odoUnit"], JsonConvert.DeserializeObject<SerializableDictionary<int, DateTime?>>(queryStr["attributes"]), JsonConvert.DeserializeObject<SerializableDictionary<int, string>>(HttpContext.Current.Request.Form["custFields"])); SessionCache.Current.ResetStoredData(StoreDataObject.DataType.Asset); return "{}";
+			case "assetSaveVehicleInfo": Asset.SaveVehicleInfo(loggedUser, queryStr.ToInt32("assetId"), queryStr.ToNullableInt32("odometer"), string.IsNullOrEmpty(queryStr["odometer"]) ? (DateTime?)null : DateTime.UtcNow, queryStr.ToNullableDateTime("mot"), queryStr.ToNullableDateTime("tax"), queryStr.ToNullableDateTime("insurance"), queryStr.ToNullableDateTime("serviceDate"), queryStr.ToNullableInt32("serviceOdo"), JsonConvert.DeserializeObject<SerializableDictionary<int, string>>(HttpContext.Current.Request.Form["custFields"]), new AttachmentManager(HttpContext.Current.Request.Form["attachments"])); return "{}";
+			case "assetEstimateOdo": return JSONAsset.EstimateAssetOdometer(loggedUser, queryStr.ToInt32("assetId"), Convert.ToDateTime(queryStr["date"]));
+			case "assetFuel": return JSONAsset.GetAssetFuel(loggedUser, queryStr.ToInt32("assetId"), Convert.ToDateTime(queryStr["day"]));
+			case "assetGetFreeTrackingDevices": return JSONAsset.GetFreeTrackingDevices(loggedUser, Convert.ToInt32(queryStr["alsoIncludeDeviceId"]));
+			case "assetGroups": return JSONAsset.GetAssetGroups(loggedUser);
+			case "assetGroupAutoComplete": return SessionCache.Current.GetStoredDataJson(loggedUser, StoreDataObject.DataType.AssetGroup);
+			case "assetGroupTable": return JSONAsset.GetAssetGroupTable(loggedUser);
+			case "assetGroupAddEdit": Asset.AddEditAssetGroup(loggedUser, Convert.ToInt32(queryStr["assetGroupId"]), queryStr["assetGroupName"]); SessionCache.Current.ResetStoredData(StoreDataObject.DataType.AssetGroup); return "{}";
+			case "assetGroupDelete": Asset.DeleteAssetGroup(loggedUser, Convert.ToInt32(queryStr["assetGroupId"])); SessionCache.Current.ResetStoredData(StoreDataObject.DataType.AssetGroup); return "{}";
+			case "assetFuelCostTable": return Fuel.GetFuelCostTable(loggedUser);
+			case "assetFuelCostAddEdit": Fuel.AddEditFuelCost(loggedUser, queryStr.ToInt32("fuelCostId"), Convert.ToDateTime(queryStr["start"]), Convert.ToDateTime(queryStr["stop"]), Convert.ToDouble(queryStr["litrePrice"].Replace(",", "."), CultureInfo.CreateSpecificCulture("en-gb")), queryStr["currency"]); return "{}";
+			case "assetFuelCostDelete": Fuel.DeleteFuelCost(loggedUser, queryStr.ToInt32("fuelCostId")); return "{}";
+			case "assetInputs": return JSONAsset.GetAssetInputs(loggedUser, queryStr.ToNullableInt32("assetId"));
+			case "assetLastImmobilised": return JSONAsset.GetLastImmobiliseCommand(loggedUser, queryStr.ToInt32("assetId"));
+			case "assetImmobilise": return JSONAsset.SendImmobiliseCommand(loggedUser, queryStr.ToInt32("assetId"), queryStr["immobilise"] == "1");
+
+			case "alertDefinitionSave": Alert.SaveAlertParam(loggedUser, HttpContext.Current.Request.Form["alertDef"]); return "{}";
+			case "alertSentTable": return JSONAlert.GetAlertSentTable(loggedUser, queryStr["sEcho"], queryStr["resetPopupIfNoResult"] == "1", queryStr["dateSearch"] == "" ? null : queryStr["dateSearch"], queryStr["unreadOnly"] == "1", queryStr.ToNullableInt32("resourceId"), queryStr.ToString("recipient"), string.IsNullOrEmpty(queryStr["type"]) || queryStr["type"] == "-1" ? (ACompanyAlertParameter.Type?)null : (ACompanyAlertParameter.Type)queryStr.ToInt32("type"), queryStr["withSnoozed"] == "1", Convert.ToInt32(queryStr["iDisplayStart"]), Convert.ToInt32(queryStr["iDisplayLength"]), Convert.ToInt32(queryStr["iSortCol_0"]), queryStr["sSortDir_0"]);
+			case "alertSentSnooze": Alert.SnoozeAlertSent(loggedUser, queryStr["alertSentId"].Split(',').Select(x => Int32.Parse(x)).ToList(), queryStr.ToInt32("minutes")); return "{}";
+			case "alertSentSnoozeAllUser": Alert.SnoozeAlertSentUser(loggedUser, queryStr.ToInt32("minutes")); return "{}";
+			case "alertSentRead": Alert.MarkAsRead(loggedUser, queryStr.ToInt32("alertSentId"), queryStr["alertSentComment"]); return "{}";
+			case "alertSentReadAllUser": Alert.MarkAllAsReadUser(loggedUser); return "{}";
+			case "alertSentMarkAllRead": Alert.MarkAllAsRead(loggedUser); return "{}";
+			case "alertSentDelete": Alert.DeleteAlertSent(loggedUser, queryStr.ToInt32("alertSentId")); return "{}";
+			case "alertParamTable": return JSONAlert.GetAlertParamTable(loggedUser, queryStr["sEcho"], queryStr["sSearch_1"] == "" ? (ol?)null : queryStr["sSearch_1"] == "1", queryStr["sSearch_3"] == "" ? (int?)null : Convert.ToInt32(queryStr["sSearch_3"]), queryStr["sSearch_5"] == "" ? (int?)null : Convert.ToInt32(queryStr["sSearch_5"]), queryStr["sSearch_4"] == "" ? null : queryStr["sSearch_4"], queryStr["sSearch_6"] == "" || queryStr["sSearch_6"] == "-1" ? (ACompanyAlertParameter.Type?)null : (ACompanyAlertParameter.Type)Convert.ToInt32(queryStr["sSearch_6"]), Convert.ToInt32(queryStr["iDisplayStart"]), Convert.ToInt32(queryStr["iDisplayLength"]), Convert.ToInt32(queryStr["iSortCol_0"]), queryStr["sSortDir_0"]);
+			case "alertParam4Action": return JSONAlert.LoadAlertParamForAction(loggedUser, queryStr.ToInt32("alertParamId"));
+			case "alertParamActivate": Alert.UpdateActiveFlag(loggedUser, Convert.ToInt32(queryStr["alertParamId"]), queryStr["activate"] == "1"); return "{}";
+			case "alertParamDelete": Alert.DeleteAlertParam(loggedUser, Convert.ToInt32(queryStr["alertParamId"])); return "{}";
+			case "alertRecipAutoComplete": return JSONAlert.GetRecipientsWithAlerts(loggedUser);
+
+			case "territory": return JSONTerritory.GetTerritory(loggedUser, queryStr.ToInt32("territoryId"));
+			case "territoryTable": return JSONTerritory.GetTerritoryTable(loggedUser);
+			case "territoryAutoComplete": return JSONTerritory.GetTerritoryAutoComplete(loggedUser);
+			case "territoryMap": return JSONTerritory.GetTerritoriesForMap(loggedUser, queryStr.ToList<int>("groups", '|'));
+			case "territoryAddEdit": Territory.AddEditTerritory(loggedUser, queryStr.ToNullableInt32("territoryId"), queryStr.ToNullableInt32("groupId"), queryStr["territoryName"], queryStr["territoryColor"], HttpContext.Current.Request.Form["latLng"], HttpContext.Current.Request.Form["centreLat"] == null ? (double?)null : Convert.ToDouble(HttpContext.Current.Request.Form["centreLat"]), HttpContext.Current.Request.Form["centreLng"] == null ? (double?)null : Convert.ToDouble(HttpContext.Current.Request.Form["centreLng"]), HttpContext.Current.Request.Form["radius"] == null ? (double?)null : Convert.ToDouble(HttpContext.Current.Request.Form["radius"])); return "{}";
+			case "territoryDelete": Territory.DeleteTerritory(loggedUser, queryStr.ToInt32("territoryId")); return "{}";
+			case "territoryTempGroups": return JSONTerritory.GetTerritoryTemplateGroups(loggedUser, string.IsNullOrEmpty(queryStr["parentId"]) ? (int?)null : Convert.ToInt32(queryStr["parentId"]));
+			case "territoryTemplates": return JSONTerritory.GetTerritoryTemplates(loggedUser, Convert.ToInt32(queryStr["groupId"]), queryStr["term"]);
+			case "territoryTemplate": return JSONTerritory.GetTerritoryTemplate(loggedUser, Convert.ToInt32(queryStr["templateId"]));
+			case "territoryImport": Territory.ImportTerritory(loggedUser, Convert.ToInt32(queryStr["templateId"]), queryStr.ToNullableInt32("groupId"), queryStr["color"]); return "{}";
+			case "territoryGroupTable": return JSONTerritory.GetTerritoryGroupTable(loggedUser);
+			case "territoryGroupAutoComplete": return JSONTerritory.TerritoryGroupsAutoComplete(loggedUser);
+			case "territoryGroupAddEdit": Territory.AddEditTerritoryGroup(loggedUser, Convert.ToInt32(queryStr["territoryGroupId"]), queryStr["territoryGroupName"]); return "{}";
+			case "territoryGroupDelete": Territory.DeleteTerritoryGroup(loggedUser, Convert.ToInt32(queryStr["territoryGroupId"])); return "{}";
+
+			case "expenseItemTable": return JSONExpense.GetExpenseItemTable(loggedUser, queryStr.ToInt32("resourceId"), queryStr.ToDateTime("from"), queryStr.ToDateTime("to"), string.IsNullOrEmpty(queryStr["status"]) ? (ACompanyExpenseItem.Status?)null : (ACompanyExpenseItem.Status)queryStr.ToShort("status"), queryStr.ToNullableInt32("type"), ApplicationWrapper.Current.Currencies, queryStr["sEcho"], Convert.ToInt32(queryStr["iDisplayStart"]), Convert.ToInt32(queryStr["iDisplayLength"]), Convert.ToInt32(queryStr["iSortCol_0"]), queryStr["sSortDir_0"]);
+			case "expenseItemSave": Expense.SaveExpenseItem(loggedUser, queryStr.ToNullableInt32("ItemId"), queryStr.ToInt32("resourceId"), queryStr.ToDateTime("date"), queryStr.ToInt32("type"), HttpContext.Current.Request.Form["description"], queryStr.ToDouble("exclTax"), queryStr.ToDouble("vat"), queryStr.ToDouble("inclTax"), queryStr["currency"], queryStr.ToNullableDouble("fuel"), (ACompanyExpenseItem.Status)queryStr.ToShort("status"), HttpContext.Current.Request.Form["comment"]); return "{}";
+			case "expenseTypeTable": return JSONExpense.GetExpenseTypeTable(loggedUser);
+			case "expenseTypeAutoComplete": return JSONExpense.GetExpenseTypeAutoComplete(loggedUser);
+			case "expenseTypeGroup": return JSONExpense.GetExpenseTypeGroups(loggedUser, queryStr["term"]);
+			case "expenseTypeSend2All": Expense.SendToResources(loggedUser); return "{}";
+			case "expenseTypeDelete": Expense.DeleteExpenseType(loggedUser, Convert.ToInt32(queryStr["expenseTypeId"])); return "{}";
+			case "expenseTypeSave": Expense.SaveExpenseType(loggedUser, Convert.ToInt32(queryStr["expenseTypeId"]), queryStr["expenseTypeGroup"], queryStr["expenseTypeName"], Convert.ToDouble(queryStr["expenseTypeVAT"].Replace(",", "."), CultureInfo.CreateSpecificCulture("en-gb")), string.IsNullOrEmpty(queryStr["expenseTypeDefault"]) ? (double?)null : Convert.ToDouble(queryStr["expenseTypeDefault"].Replace(",", "."), CultureInfo.CreateSpecificCulture("en-gb")), queryStr["expenseModifiable"] == "0", queryStr["expenseTypeFuel"] == "1"); return "{}";
+
+			case "defectTable": return JSONAsset.GetAssetDefectTable(loggedUser, queryStr.ToInt32("assetId"), queryStr["withArchived"] == "1");
+			case "defectSaveRead": Asset.MarkDefectAsRead(loggedUser, Convert.ToInt32(queryStr["defectId"])); return "{}";
+			case "defectArchive": Asset.ArchiveDefect(loggedUser, Convert.ToInt32(queryStr["defectId"])); return "{}";
+			case "defectComment": Asset.CommentDefect(loggedUser, Convert.ToInt32(queryStr["defectId"]), queryStr["defectComment"]); return "{}";
+			case "defectGroup": return JSONAsset.GetAssetDefectGroups(loggedUser, queryStr["term"]);
+			case "defectGroupDelete": Asset.DeleteAssetDefectGroup(loggedUser, Convert.ToInt32(queryStr["groupId"])); return JSONAsset.GetAssetDefectGroups(loggedUser, "");
+			case "defectGroupSave": Asset.SaveAssetDefectGroup(loggedUser, queryStr.ToNullableInt32("groupId"), queryStr["groupName"], queryStr["trailerDefault"] == "1"); return JSONAsset.GetAssetDefectGroups(loggedUser, "");
+			case "defectTypeTable": return JSONAsset.GetAssetDefectTypeTable(loggedUser);
+			case "defectTypeSave": Asset.SaveAssetDefectType(loggedUser, queryStr.ToInt32("defectGroupId"), queryStr.ToNullableInt32("defectTypeId"), queryStr["defectTypeName"], queryStr["defectTypeRisk"] == "1", queryStr["defectTypePhoto"] == "1"); return "{}";
+			case "defectTypeDelete": Asset.DeleteAssetDefectType(loggedUser, queryStr.ToInt32("defectTypeId")); return "{}";
+			case "defectSend2All": Asset.SendDefectGroupsToOutx(loggedUser); return "{}";
+
+			case "worksheetTable": return JSONWorksheet.GetWorksheetTable(loggedUser, (ACompanyWorksheet.Type)queryStr.ToShort("type"));
+			case "worksheetAutoComplete": return (ACompanyWorksheet.Type)queryStr.ToShort("type") == ACompanyWorksheet.Type.Worksheet ? SessionCache.Current.GetStoredData<string>(SessionWrapper.Current.LoggedUser, StoreDataObject.DataType.Worksheet) : JSONWorksheet.GetWorksheetAutoComplete(loggedUser.UserCustomer, (ACompanyWorksheet.Type)queryStr.ToShort("type"));
+			case "worksheetIds4Action": return JSONWorksheet.GetWorksheetIds4Action(loggedUser, queryStr.ToInt32("ActionId"));
+			case "worksheetDelete": Worksheet.DeleteWorksheet(loggedUser, queryStr.ToInt32("worksheetId"), (ACompanyWorksheet.Type)queryStr.ToShort("type")); SessionCache.Current.ResetStoredData(StoreDataObject.DataType.Worksheet); return "{}";
+			case "worksheetLock": Worksheet.UpdateWorksheetLock(loggedUser, queryStr.ToInt32("worksheetId"), queryStr["locked"] == "1"); return "{}";
+			case "worksheetSave": Worksheet.SaveWorksheet(loggedUser, queryStr.ToNullableInt32("worksheetId"), (ACompanyWorksheet.Type)queryStr.ToShort("type"), queryStr["worksheetName"], string.IsNullOrEmpty(queryStr["phaseUser"]) ? (ACompanyWorksheet.PhaseUser?)null : (ACompanyWorksheet.PhaseUser)queryStr.ToInt32("phaseUser"), string.IsNullOrEmpty(queryStr["phaseResource"]) ? (ACompanyWorksheet.PhaseResource?)null : (ACompanyWorksheet.PhaseResource)queryStr.ToInt32("phaseResource"), string.IsNullOrEmpty(queryStr["phaseContactUser"]) ? (ACompanyWorksheet.PhaseUser?)null : (ACompanyWorksheet.PhaseUser)queryStr.ToInt32("phaseContactUser"), queryStr["worksheetLabelAnswer"], queryStr["worksheetLabelNotes"]); SessionCache.Current.ResetStoredData(StoreDataObject.DataType.Worksheet); return "{}";
+			case "worksheetDuplicate": Worksheet.DuplicateWorksheet(loggedUser, queryStr.ToInt32("worksheetId"), queryStr["worksheetName"]); SessionCache.Current.ResetStoredData(StoreDataObject.DataType.Worksheet); return "{}";
+			case "worksheetQuestionTable": return JSONWorksheet.GetWorksheetQuestionTable(loggedUser, queryStr.ToInt32("worksheetId"));
+			case "worksheetQuestions": return JSONWorksheet.GetWorksheetQuestionsDistinct(loggedUser, (ACompanyWorksheet.Type)queryStr.ToShort("type"), queryStr.ToNullableInt32("worksheetId"));
+			case "worksheetSend2All": Worksheet.SendToResources(loggedUser); return "{}";
+			case "worksheetQuestionSave": Worksheet.SaveWorksheetQuestion(loggedUser, queryStr.ToInt32("worksheetId"), queryStr.ToNullableInt32("questionId"), queryStr["questionText"], (ACompanyWorksheetQuestion.QuestionType)Convert.ToInt16(queryStr["questionType"]), HttpContext.Current.Request.Form["questionExtra"], queryStr["questionMandatory"] == "1", queryStr["onActionCard"] == "1", queryStr["questionDefault"], queryStr["answerAtRisk"], string.IsNullOrEmpty(HttpContext.Current.Request.Form["next"]) ? null : JsonConvert.DeserializeObject<List<ACompanyWorksheetQuestion.Next>>(HttpContext.Current.Request.Form["next"]), Convert.ToInt16(queryStr["questionOrder"])); return "{}";
+			case "worksheetQuestionDelete": Worksheet.DeleteWorksheetQuestion(loggedUser, queryStr.ToInt32("questionId")); return "{}";
+			case "worksheetQuestionReorder": Worksheet.ReorderWorksheetQuestion(loggedUser, queryStr.ToInt32("questionId"), queryStr.ToInt32("from"), queryStr.ToInt32("to")); return "{}";
+			case "worksheetQuestionDupl": Worksheet.DuplicateQuestion(loggedUser, queryStr.ToInt32("questionId"), queryStr.ToShort("order")); return "{}";
+			case "worksheetQuestionRisk": return JSONWorksheet.GetQuestionAtRisk(loggedUser, queryStr.ToNullableInt32("worksheetId"));
+			case "worksheetAnswers": return JSONWorksheet.GetWorksheetAnswers(loggedUser, ApplicationWrapper.Current.Currencies, (ACompanyWorksheetAnswer.EntityType)queryStr.ToShort("entity"), queryStr.ToInt32("entityId"), queryStr.ToListInt("worksheetIds", ','));
+			case "worksheetAnswerSave": var answer = Worksheet.SaveWorksheetAnswer(loggedUser, (ACompanyWorksheetAnswer.EntityType)queryStr.ToShort("entity"), queryStr.ToInt32("entityId"), queryStr.ToInt32("questionId"), queryStr.ToNullableInt32("answerId"), HttpContext.Current.Request.Form["answer"], HttpContext.Current.Request.Form["note"], queryStr.ToNullableDouble("quantity"), queryStr.ToNullableDouble("exclTax"), queryStr.ToNullableDouble("vat"), queryStr.ToNullableDouble("inclTax"), queryStr["currency"]); return "{\"AnswerId\":" + answer?.WorksheetAnswerId + "}";
+			case "worksheetAnswerDelete": Worksheet.DeleteWorksheetAnswer(loggedUser, (ACompanyWorksheetAnswer.EntityType)queryStr.ToShort("entity"), queryStr.ToInt32("answerId")); return "{}";
+
+			case "stockTypeAutoComplete": return JSONStock.GetStockTypeAutoComplete(loggedUser);
+			case "stockTypeSave": Stock.SaveStockType(loggedUser, queryStr.ToNullableInt32("typeId"), queryStr.ToString("typeName")); return "{}";
+			case "stockTypeDelete": Stock.DeleteStockType(loggedUser, queryStr.ToInt32("typeId")); return "{}";
+			case "stockTypePrice": return JSONStock.GetStockTypePrice(loggedUser, queryStr.ToInt32("stockTypeId"), queryStr.ToInt32("priceAtContact"), ApplicationWrapper.Current.Currencies);
+			case "stockAutoComplete": return JSONStock.GetStockAutoComplete(loggedUser, queryStr.ToNullableInt32("typeId"), queryStr["term"]);
+			case "stockSave": Stock.SaveStock(loggedUser, queryStr.ToNullableInt32("stockId"), queryStr.ToInt32("typeId"), queryStr.ToNullableInt32("nominalCodeId"), queryStr.ToNullableInt32("departmentCodeId"), queryStr.ToString("make"), queryStr.ToString("model"), queryStr.ToString("modelNumber"), queryStr["consumable"] == "1", queryStr.ToString("notes"), queryStr.ToNullableDouble("size"), queryStr.ToNullableDouble("weight"), queryStr.ToNullableDouble("sellingPrice"), queryStr.ToString("currency"), new AttachmentManager(HttpContext.Current.Request.Form["attachments"]), queryStr["code"], queryStr["batch"], queryStr.ToListInt("sheetOk", ','), queryStr.ToListInt("sheetKo", ',')); return "{ }";
+			case "stockEmpty": Stock.EmptyStock(loggedUser, queryStr.ToInt32("stockId")); return "{}";
+			case "stockDelete": Stock.DeleteStock(loggedUser, queryStr.ToInt32("stockId")); return "{}";
+			case "stockTable": return JSONStock.GetStockTable(loggedUser, queryStr["sEcho"], queryStr.ToNullableInt32("typeId"), queryStr["search"], Convert.ToInt32(queryStr["iDisplayStart"]), Convert.ToInt32(queryStr["iDisplayLength"]), Convert.ToInt32(queryStr["iSortCol_0"]), queryStr["sSortDir_0"]);
+			case "stockDetail": return JSONStock.GetStockDetail(loggedUser, queryStr.ToInt32("stockId"), queryStr["targetCurrency"], queryStr["suppliers"] == "1", queryStr.ToNullableInt32("priceAtContact"), ApplicationWrapper.Current.Currencies);
+			case "stockQtyAtLoc": return JSONStock.GetStockQuantityAtLocation(loggedUser, queryStr.ToInt32("stockId"), queryStr.ToInt32("ItemId2Exclude"), queryStr.ToNullableInt32("contactId"), queryStr.ToNullableInt32("assetId"));
+			case "stockAtLoc": return JSONStock.GetStockAtLocation(loggedUser, queryStr.ToNullableInt32("stockTypeId"), queryStr.ToNullableInt32("contactId"), queryStr.ToNullableInt32("assetId"));
+			case "stockConfirm": Stock.ConfirmReception(loggedUser, queryStr.ToInt32("stockId"), queryStr.ToInt32("invoiceId"), queryStr["consumable"] == "1", queryStr.ToDouble("quantity"), HttpContext.Current.Request.Form.ToList<string>("serials", '\n'), queryStr.ToDouble("cost"), queryStr["currency"], queryStr.ToInt32("supplierId"), queryStr.ToNullableInt32("siteId")); return "{ }";
+			case "stockItemTable": return JSONStock.GetStockItemTable(loggedUser, queryStr["sEcho"], queryStr.ToNullableInt32("typeId"), queryStr.ToNullableInt32("stockId"), queryStr.ToNullableInt32("itemId"), queryStr.ToNullableInt32("consId"), string.IsNullOrEmpty(queryStr["equipment"]) ? (ol?)null : queryStr["equipment"] == "1", queryStr["sold"] != "0", queryStr["sold"] != "1", queryStr.ToNullableInt32("contactId"), queryStr.ToNullableInt32("assetId"), queryStr.ToNullableInt32("currentItemId"), queryStr.ToNullableInt32("contractId"), Convert.ToInt32(queryStr["iDisplayStart"]), Convert.ToInt32(queryStr["iDisplayLength"]), Convert.ToInt32(queryStr["iSortCol_0"]), queryStr["sSortDir_0"]);
+			case "stockItemTableAdmin": return JSONStock.GetStockItemTableAdmin(loggedUser, queryStr["sEcho"], queryStr.ToNullableInt32("typeId"), queryStr.ToNullableInt32("stockId"), queryStr.ToNullableInt32("itemId"), queryStr.ToNullableInt32("consId"), string.IsNullOrEmpty(queryStr["equipment"]) ? (ol?)null : queryStr["equipment"] == "1", queryStr["sold"] != "0", queryStr["sold"] != "1", queryStr.ToNullableInt32("contactId"), queryStr["withChildren"] == "1", queryStr.ToNullableInt32("assetId"), queryStr.ToNullableInt32("currentItemId"), queryStr.ToNullableDateTime("ActionFrom"), queryStr.ToNullableDateTime("ActionTo"), queryStr.ToNullableInt32("contractId"), string.IsNullOrEmpty(queryStr["customFields"]) ? null : JsonConvert.DeserializeObject<Dictionary<int, string>>(queryStr["customFields"]), Convert.ToInt32(queryStr["iDisplayStart"]), Convert.ToInt32(queryStr["iDisplayLength"]), Convert.ToInt32(queryStr["iSortCol_0"]), queryStr["sSortDir_0"], ApplicationWrapper.Current.Currencies);
+			case "stockItemHistoSave": return Stock.SaveStockMovement(loggedUser, queryStr.ToInt32("ActionId"), HttpContext.Current.Request.Form[0]);
+			case "stockItemHistoTable": return JSONStock.GetStockItemHistoTable(loggedUser, queryStr.ToNullableInt32("stockId"), queryStr.ToNullableInt32("stockItemId"), queryStr.ToNullableInt32("contactId"), queryStr.ToNullableInt32("assetId"), queryStr.ToNullableInt32("invoiceId"));
+			case "stockItemHistoContactTable": return JSONStock.GetStockItemHistoAtContactOrAssetTable(loggedUser, queryStr.ToNullableInt32("contactId"), queryStr.ToNullableInt32("assetId"), queryStr.ToNullableInt32("ActionId"));
+			case "stockItemMap": return JSONStock.GetStockItemsForMap(loggedUser, queryStr.ToNullableInt32("typeId"), queryStr.ToNullableInt32("stockId"), queryStr.ToNullableInt32("itemId"), string.IsNullOrEmpty(queryStr["equipment"]) ? (ol?)null : queryStr["equipment"] == "1", queryStr["sold"] != "0", queryStr["sold"] != "1", queryStr.ToNullableInt32("contactId"), queryStr.ToNullableInt32("assetId"), new Coordinate(queryStr["unds"].Split(',')[0], queryStr["unds"].Split(',')[1]), new Coordinate(queryStr["unds"].Split(',')[2], queryStr["unds"].Split(',')[3]));
+			case "stockItemAutoComplete": return JSONStock.GetStockItemAutoComplete(loggedUser, queryStr.ToNullableInt32("stockId"), queryStr["term"], queryStr["nonConsumableOnly"] == "1");
+			case "stockItemDetail": return queryStr["itemId"] != null ? JSONStock.GetStockItemDetail(loggedUser, queryStr.ToInt32("itemId")) : JSONStock.GetStockItemDetail(loggedUser, queryStr["reference"]);
+			case "stockItemAtLoc": return JSONStock.GetStockItemAtLocation(loggedUser, queryStr.ToInt32("stockId"), queryStr.ToNullableInt32("contactId"), queryStr.ToNullableInt32("assetId"));
+			case "stockItemInCons": return JSONStock.GetStockItemInConsignment(loggedUser, queryStr.ToInt32("consId"));
+			case "stockItemSave": Stock.SaveStockItem(loggedUser, queryStr.ToNullableInt32("itemId"), queryStr.ToInt32("stockId"), queryStr.ToNullableInt32("contactId"), queryStr.ToNullableInt32("assetId"), queryStr.ToNullableInt32("currentItemId"), queryStr["movementLoc"] == "1", queryStr["movementQty"] == "1", queryStr.ToString("itemReference"), queryStr["equipement"] == "1", queryStr.ToNullableDouble("itemUsage"), queryStr.ToString("itemNote"), string.IsNullOrEmpty("itemCondition") ? (ACompanyStockItem.Condition?)null : (ACompanyStockItem.Condition)queryStr.ToShort("itemCondition"), queryStr.ToDouble("itemQuantity"), queryStr.ToNullableDateTime("itemDate"), queryStr.ToNullableDateTime("soldDate"), queryStr["custFieldId"] == null ? new List<string>() : queryStr["custFieldId"].Split(',').ToList(), queryStr["custFieldVal"] == null ? new List<string>() : queryStr["custFieldVal"].Split(',').ToList(), new AttachmentManager(HttpContext.Current.Request.Form["attachments"])); return "{}";
+			case "stockItemRecSave": Stock.UpdateStockItemRecurrence(loggedUser, ACompanyStockItem.GetById(loggedUser.UserCustomer, queryStr.ToInt32("itemId")), queryStr.ToNullableDateTime("recurrenceStart"), HttpContext.Current.Request.Form["recurrence"], queryStr.ToNullableInt32("ActionTypeId")); return "{}";
+			case "stockItemDelete": Stock.DeleteStockItem(loggedUser, queryStr.ToInt32("itemId")); return "{}";
+			case "stockSupplierTable": return JSONStock.GetStockSuppliersTable(loggedUser, queryStr.ToInt32("stockId"));
+			case "stockSupplierSave": Stock.SaveStockSupplier(loggedUser, queryStr.ToNullableInt32("supplierId"), queryStr.ToInt32("stockId"), queryStr.ToInt32("contactId"), queryStr.ToNullableShort("warranty"), queryStr.ToNullableDouble("cost"), queryStr.ToString("currency")); return "{}";
+			case "stockSupplierDelete": Stock.DeleteStockSupplier(loggedUser, queryStr.ToInt32("supplierId"), queryStr.ToInt32("stockId"), queryStr.ToInt32("contactId")); return "{}";
+			case "stockLevelSave": Stock.SaveStockReorderLevel(loggedUser, queryStr.ToNullableInt32("reorderId"), queryStr.ToInt32("stockId"), (ACompanyStockReorderLevel.EntityType)queryStr.ToShort("entityType"), queryStr.ToInt32("entityId"), queryStr.ToDouble("quantity")); return "{}";
+			case "stockLevelDelete": Stock.DeleteStockReorderLevel(loggedUser, queryStr.ToInt32("reorderId")); return "{}";
+			case "stockLevelTable": return JSONStock.GetReorderLevelTable(loggedUser, (ACompanyStockReorderLevel.EntityType)queryStr.ToShort("entityType"), queryStr.ToInt32("entityId"));
+			case "stockConsTable": return JSONStock.GetConsignmentTable(loggedUser, queryStr["sEcho"], queryStr["search"], Convert.ToInt32(queryStr["iDisplayStart"]), Convert.ToInt32(queryStr["iDisplayLength"]), Convert.ToInt32(queryStr["iSortCol_0"]), queryStr["sSortDir_0"]);
+			case "stockConsSave": var cons = Stock.SaveStockConsignment(loggedUser, queryStr.ToNullableInt32("consId"), queryStr["consName"]); return JsonConvert.SerializeObject(new { Id = cons.StockConsignmentId, Name = cons.StockConsignmentName });
+			case "stockConsDelete": Stock.DeleteStockConsignment(loggedUser, queryStr.ToInt32("consId")); return "{}";
+			case "stockConsItem": Stock.UpdateStockitemConsignment(loggedUser, queryStr.ToInt32("itemId"), queryStr.ToNullableInt32("consId"), queryStr["delAction"] == "1"); return "{}";
+			case "stockConsAutoComplete": return JSONStock.GetStockConsignmentAutoComplete(loggedUser, queryStr["term"]);
+
+			case "attributeTable": return JSONAttribute.GetAttributeTable(loggedUser, (ACompanyAttribute.Type)queryStr.ToInt32("typeId"));
+			case "attributeAutoComplete": return JSONAttribute.GetAttributeAutoComplete(loggedUser, (ACompanyAttribute.Type)queryStr.ToInt32("typeId"));
+			case "attributeSave": JSONAttribute.SaveAttribute(loggedUser, queryStr.ToNullableInt32("attributeId"), (ACompanyAttribute.Type)queryStr.ToInt32("attributeType"), queryStr.ToString("attributeName")); SessionCache.Current.ResetStoredData((ACompanyAttribute.Type)queryStr.ToInt32("attributeType") == ACompanyAttribute.Type.AssetAttribute ? StoreDataObject.DataType.Attribute : StoreDataObject.DataType.Skill); return "{}";
+			case "attributeDelete": JSONAttribute.DeleteAttribute(loggedUser, queryStr.ToInt32("attributeId")); SessionCache.Current.ResetStoredData((ACompanyAttribute.Type)queryStr.ToInt32("attributeType") == ACompanyAttribute.Type.AssetAttribute ? StoreDataObject.DataType.Attribute : StoreDataObject.DataType.Skill); return "{}";
+
+			case "productUpdateRead": ACompanyProductUpdate.MarkUnreadAsRead(loggedUser); loggedUser.CurrentNotifications.Updates = 0; return "{}";
+
+			case "timeArray": return Web.ConstructTimeArray(queryStr.ToInt32("minHour"), queryStr.ToInt32("increment"));
+
+			case "travel": var distance = new Distance(0); var duration = Geocoding.CaculateDrivingDuration(new Coordinate(queryStr["lat1"], queryStr["lng1"]), new Coordinate(queryStr["lat2"], queryStr["lng2"]), false, ref distance) / 60; return "{\"Distance\":" + distance.Kilometer + ",\"Duration\":" + duration + "}";
+
+			case "customFieldTable": return CustomField.GetCustomFieldTable(loggedUser, (ACompanyCustomField.EntityType)queryStr.ToInt32("entity"), queryStr.ToNullableInt32("entityGroupId"));
+			case "customFieldAutoComplete": return CustomField.GetCustomFieldsForAutoComplete(loggedUser, (ACompanyCustomField.EntityType)queryStr.ToInt32("entity"), queryStr.ToListInt("entityGroupId", ','));
+			case "customFieldDistinct": return CustomField.GetCustomFieldsDistinct(loggedUser, (ACompanyCustomField.EntityType)queryStr.ToInt32("entity"));
+			case "customFields": return CustomField.GetCustomFields(string.IsNullOrEmpty(queryStr["customerUid"]) ? loggedUser.UserCustomer : ACompanyCustomer.GetByUId(queryStr["customerUid"]), (ACompanyCustomField.EntityType)queryStr.ToInt32("entity"), queryStr.ToNullableInt32("entityGroupId"));
+			case "customFieldSave": CustomField.SaveCustomField(loggedUser, (ACompanyCustomField.EntityType)queryStr.ToInt32("entity"), queryStr.ToNullableInt32("entityGroupId"), queryStr.ToNullableInt32("customFieldId"), queryStr["fieldCaption"], (ACompanyCustomField.FieldType)queryStr.ToShort("fieldType"), HttpUtility.UrlDecode(HttpContext.Current.Request.Form["fieldExtra"]), queryStr["fieldMandatory"] == "1", HttpContext.Current.Request.Form["fieldDefault"], queryStr.ToShort("fieldOrder"), (ACompanyCustomField.FieldOptions)queryStr.ToInt32("options")); return "{}";
+			case "customFieldsDuplicate": CustomField.DuplicateCustomFields(loggedUser, (ACompanyCustomField.EntityType)queryStr.ToInt32("entity"), queryStr.ToInt32("fromGroupId"), queryStr.ToInt32("toGroupId")); return "{}";
+			case "customFieldDuplicate": CustomField.DuplicateCustomField(loggedUser, Convert.ToInt32(queryStr["customFieldId"]), queryStr.ToShort("fieldOrder")); return "{}";
+			case "customFieldDelete": CustomField.DeleteCustomField(loggedUser, Convert.ToInt32(queryStr["customFieldId"])); return "{}";
+			case "customFieldReorder": CustomField.ReorderCustomField(loggedUser, queryStr.ToInt32("customFieldId"), queryStr.ToInt32("from"), queryStr.ToInt32("to")); return "{}";
+
+			case "routeOptimiseMap": return JSONRouteOptimise.OptimiseStopsForMap(queryStr["stops"].Split('|').Select(x => new Coordinate(x.Split(',')[0], x.Split(',')[1])));
+			case "routeOptimise": JSONRouteOptimise.GetOptimisedRoute(loggedUser, queryStr.ToNullableInt32("resId"), queryStr.ToNullableInt32("assetId"), queryStr.ToDateTime("dateMin"), queryStr.ToDateTime("dateMax")); return "{}";
+			case "routeOptimiseApply": JSONRouteOptimise.ApplyOptimisedRoute(loggedUser, HttpContext.Current.Request.Params["route"], HttpContext.Current.Request.Params.ToInt32("startMin")); return "{}";
+
+			case "routes": return JSONRoute.GetRoutes(loggedUser);
+			case "routeTable": return JSONRoute.GetRouteTable(loggedUser);
+			case "routeAutoComplete": return JSONRoute.GetRouteAutoComplete(loggedUser);
+			case "routeSave": Route.AddEditRoute(loggedUser, queryStr.ToNullableInt32("routeId"), queryStr["routeName"], JsonConvert.DeserializeObject<List<ACompanyRouteStop>>(HttpContext.Current.Request.Form["stops"])); return "{}";
+			case "routeDuplicate": Route.DuplicateRoute(loggedUser, queryStr.ToInt32("routeId")); return "{}";
+			case "routeDelete": Route.DeleteRoute(loggedUser, queryStr.ToInt32("routeId")); return "{}";
+			case "routeApply": Route.ApplyRoute(loggedUser, queryStr.ToInt32("routeId"), queryStr.ToNullableInt32("resourceId"), queryStr.ToNullableInt32("assetId"), queryStr.ToDateTime("start")); return "{}";
+
+			case "topEmployeeTable": return JSONTopEmployee.GetTopEmployeeTable(loggedUser);
+			case "topEmployeeDetail": return JSONTopEmployee.GetTopEmployeeDetail(loggedUser, queryStr.ToInt32("topEmployeeId"));
+			case "topEmployeeSave": JSONTopEmployee.SaveTopEmployee(loggedUser, queryStr.ToNullableInt32("topEmployeeId"), HttpContext.Current.Request.Form["pioneerImg"], string.IsNullOrEmpty(HttpContext.Current.Request.Form["pioneerCrop"]) ? null : HttpContext.Current.Request.Form["pioneerCrop"].Split('|').Select(s => Convert.ToInt32(s)).ToArray(), queryStr["pioneerName"], HttpContext.Current.Request.Form["championImg"], string.IsNullOrEmpty(HttpContext.Current.Request.Form["championCrop"]) ? null : HttpContext.Current.Request.Form["championCrop"].Split('|').Select(s => Convert.ToInt32(s)).ToArray(), queryStr["championName"], HttpContext.Current.Request.Form["comment"]); return "{}";
+			case "topEmployeeSetLive": JSONTopEmployee.SetTopEmployeeLive(loggedUser, queryStr.ToNullableInt32("topEmployeeId")); return "{}";
+			case "topEmployeeDelete": JSONTopEmployee.DeleteTopEmployee(loggedUser, queryStr.ToInt32("topEmployeeId")); return "{}";
+
+			case "search": return JsonConvert.SerializeObject(ACompanyUbiquitousSearch.Search(loggedUser, queryStr["term"].Trim(), SessionCache.Current.GetStoredData<List<ACompanyCustomerStatistic>>(loggedUser, StoreDataObject.DataType.CustomerStatistic)));
+
+			case "attachments": return JSONAttachment.GetAttachments(loggedUser.UserCustomer, queryStr.ToInt32("entityId"), (ACompanyAttachment.EntityType)queryStr.ToInt32("entityType"), ACompanyAttachment.VisibilityType.WebUser);
+			case "downloadAttachments": return JSONAttachment.pathTopZipAttachments(loggedUser.UserCustomer, queryStr.ToInt32("entityId"), (ACompanyAttachment.EntityType)queryStr.ToInt32("entityType"), ACompanyAttachment.VisibilityType.WebUser);
+			case "attachAdd": var attach = Attachment.SaveAttachment(loggedUser, HttpContext.Current.Request.Files["uploadFile"], queryStr.ToInt32("entityId"), (ACompanyAttachment.EntityType)queryStr.ToInt32("entityType"), ACompanyLogError.Application.ACompanyWeb, (ACompanyAttachment.VisibilityType)queryStr.ToInt32("visibility")); HttpContext.Current.Response.ContentType = "text/html"; return attach == null ? JsonConvert.SerializeObject(new { Error = Misc.Lang("file_none") }) : JsonConvert.SerializeObject(new { Id = attach.AttachmentId, Uid = attach.AttachmentFileId, FileName = attach.AttachmentDescription, URL = Attachment.GetFileURL(attach), Visibility = (short)attach.AttachmentVisibility, DateCreated = attach.AttachmentDateCreated });
+			case "attachSave":
+				byte[] attachment = null;
+				if (!string.IsNullOrEmpty(queryStr["filePath"]))
+					attachment = new AmazonS3().LoadFile("ACompanychangeapps-tempdata", queryStr["filePath"]);
+				var file = Attachment.SaveAttachment(loggedUser.UserCustomer, loggedUser.UserId, queryStr.ToNullableInt32("fileId"), attachment, queryStr["fileName"], queryStr.ToInt32("entityId"), (ACompanyAttachment.EntityType)queryStr.ToInt32("entityType"), queryStr["fileType"], queryStr["fileExt"], ACompanyLogError.Application.ACompanyWeb, DateTime.UtcNow, ACompanyAttachment.VisibilityType.WebUser | ACompanyAttachment.VisibilityType.Resource); Attachment.AssignAttachments2ResourceGroups(loggedUser, file, queryStr.ToListInt("resGroup", '|')); return "{}";
+			case "attachVisibility": Attachment.SaveVisibility(loggedUser, queryStr.ToInt32("attachmentId"), (ACompanyAttachment.VisibilityType)queryStr.ToInt32("visibility")); return "{}";
+			case "attachDelete": Attachment.DeleteAttachment(loggedUser, queryStr.ToInt32("attachmentId"), queryStr.ToGuid("attachmentUid")); return "{}";
+			case "attachSaveTemp":
+				HttpContext.Current.Response.ContentType = "text/html";
+				return Attachment.SaveTempFile(HttpContext.Current.Request.Files["uploadFile"], queryStr.ToNullableShort("visibility"));
+			case "attachTable": return JSONAttachment.GetAttachmentsTable(loggedUser, (ACompanyAttachment.EntityType)queryStr.ToInt32("entityType"), queryStr.ToNullableInt32("resourceGroupId"));
+			case "attachLibSave": Attachment.SaveAttachmentLibrary(loggedUser, queryStr.ToNullableInt32("libId"), queryStr["libName"]); return JSONAttachment.GetAttachmentLibrary(loggedUser);
+			case "attachLibDelete": Attachment.DeleteAttachmentLibrary(loggedUser, queryStr.ToInt32("libId")); return JSONAttachment.GetAttachmentLibrary(loggedUser);
+			case "attachResGroup": return JSONAttachment.GetAttachedResourceGroups(loggedUser, queryStr.ToInt32("attachmentId"));
+			case "attachLogo": return Attachment.SaveLogo(loggedUser, HttpContext.Current.Request.Files["uploadFile"]);
+
+			case "invoiceItems": return JSONInvoice.GetInvoiceItemsJson(loggedUser, queryStr.ToNullableInt32("ActionId"), queryStr.ToNullableInt32("invoiceId"), queryStr.ToNullableInt32("ActionGroupId"), queryStr.ToNullableInt32("soId"), queryStr["recalculate"] == "1");
+			case "invoiceItems4Inv": return JSONInvoice.GetInvoiceItemsForInvoices(loggedUser, queryStr.ToDateTime("from"), queryStr.ToDateTime("to"), (ACompanyInvoice.DateFilterOption)queryStr.ToShort("dateOption"), queryStr.ToNullableInt32("conGroup"), queryStr.ToInt32("contactId"), queryStr["children"] == "1", queryStr.ToNullableInt32("ActionType"), queryStr.ToNullableInt32("ActionId"), queryStr.ToNullableInt32("ActionGroupId"), queryStr.ToNullableInt32("soId"), queryStr["ref"], queryStr.ToListInt("types", ','), queryStr.ToListInt("status", ','), string.IsNullOrEmpty(queryStr["cancelled"]) ? (ol?)null : queryStr["cancelled"] == "1", string.IsNullOrEmpty(queryStr["customFields"]) ? null : JsonConvert.DeserializeObject<Dictionary<int, string>>(queryStr["customFields"]), queryStr["onePerInvoice"] == "1", queryStr["consolidatedText"], queryStr["currency"]);
+			case "invoiceRate": return JSONInvoice.GetInvoiceRate(loggedUser, queryStr.ToInt32("rateId"), ApplicationWrapper.Current.Currencies);
+			case "invoiceRateTable": return JSONInvoice.GetInvoiceRateTable(loggedUser, (ACompanyInvoiceRate.EntityType)queryStr.ToShort("entityType"), queryStr.ToInt32("entityId"), ApplicationWrapper.Current.Currencies);
+			case "invoiceRateSave": Invoice.SaveInvoiceRate(loggedUser, queryStr.ToNullableInt32("rateId"), (ACompanyInvoiceRate.EntityType)queryStr.ToShort("entityType"), queryStr.ToInt32("entityId"), queryStr.ToNullableInt32("entity2Id"), string.IsNullOrEmpty(queryStr["shiftDays"]) ? (ACompanyWeekDays?)null : WeekDayExtensions.DayOfWeekListToFlags(queryStr.ToList<short>("shiftDays", ',').Select(x => (DayOfWeek)x).ToList()), queryStr.ToNullableShort("shiftStart"), queryStr.ToNullableShort("shiftEnd"), queryStr["priority"] == "1", queryStr.ToNullableDouble("cost"), queryStr.ToNullableDouble("firstHourlyCost"), queryStr.ToNullableDouble("hourlyCost"), queryStr.ToNullableDouble("overtimeHourlycost"), string.IsNullOrEmpty(queryStr["hourlyCostRoundupMinute"]) ? (ol?)null : queryStr["hourlyCostRoundup"] == "1", queryStr.ToNullableShort("hourlyCostRoundupMinute"), queryStr.ToNullableDouble("drivingHourlyCost"), queryStr.ToNullableInt32("drivingSartContactId"), queryStr.ToNullableDouble("costPerKm"), string.IsNullOrEmpty(queryStr["costActualDur"]) ? (ol?)null : queryStr["costActualDur"] == "1", queryStr["showWorkIf0"] == "1", queryStr["multiAssist"] == "1", queryStr.ToNullableInt32("vatId"), queryStr["drivingRoundUp"] == "1", queryStr.ToNullableShort("drivingRoundMinute"), queryStr.ToNullableShort("drivingMultiplier")); return "{}";
+			case "invoiceRateDelete": Invoice.DeleteInvoiceRate(loggedUser, queryStr.ToInt32("rateId")); return "{}";
+			case "invoiceDefault": return JSONInvoice.GetDefaultInvoiceDetail(loggedUser, queryStr.ToInt32("defaultId"), queryStr["targetCurrency"], queryStr.ToNullableInt32("priceAtContact"), ApplicationWrapper.Current.Currencies);
+			case "invoiceDefaultAutoComplete": return JSONInvoice.GetDefaultInvoiceAutoComplete(loggedUser, queryStr["term"], ApplicationWrapper.Current.Currencies);
+			case "invoiceDefaultTable": return JSONInvoice.GetDefaultInvoiceTable(loggedUser, queryStr.ToNullableInt32("ActionTypeId"), ApplicationWrapper.Current.Currencies);
+			case "invoiceDefaultSave": Invoice.SaveInvoiceDefault(loggedUser, queryStr.ToNullableInt32("itemId"), queryStr["reference"], queryStr.ToNullableInt32("nominalCodeId"), queryStr.ToNullableInt32("departmentCodeId"), queryStr["description"], queryStr["currency"], queryStr.ToNullableDouble("cost"), queryStr.ToDouble("unitPrice"), queryStr.ToNullableInt32("vatId"), queryStr.ToDouble("vat"), queryStr["recurringPayment"] == "1", (ACompanyInvoiceDefault.FieldOptions)queryStr.ToShort("options"), string.IsNullOrEmpty(HttpContext.Current.Request.Form["custFields"]) ? null : JsonConvert.DeserializeObject<SerializableDictionary<int, string>>(HttpContext.Current.Request.Form["custFields"])); return "{}";
+			case "invoiceDefaultDelete": Invoice.DeleteInvoiceDefault(loggedUser, queryStr.ToInt32("itemId")); return "{}";
+			case "invoiceSave": Invoice.SaveInvoice(loggedUser, queryStr.ToNullableInt32("invoiceId"), JsonConvert.DeserializeObject<Newtonsoft.Json.Linq.Actionject>(HttpContext.Current.Request.Form["invoiceItems"]), queryStr.ToNullableInt32("contractId"), queryStr.ToNullableInt32("soId"), queryStr.ToInt32("contactId"), queryStr.ToNullableInt32("siteId"), queryStr.ToNullableInt32("supplierId"), queryStr.ToNullableInt32("accountId"), queryStr.ToNullableInt32("ActionGroupId"), queryStr.ToNullableInt32("ActionId"), (ACompanyInvoice.Type)queryStr.ToInt32("type"), queryStr.ToNullableInt32("reportId"), queryStr.ToDateTime("creationDate"), HttpContext.Current.Request.Form["recurrence"], queryStr.ToNullableInt32("nominalCodeId"), queryStr.ToNullableInt32("departmentCodeId"), queryStr["reference"], HttpContext.Current.Request.Form["firstLine"], HttpContext.Current.Request.Form["notes"], HttpContext.Current.Request.Form["internalNotes"], queryStr.ToNullableShort("delay"), JsonConvert.DeserializeObject<SerializableDictionary<int, string>>(HttpContext.Current.Request.Form["custFields"]), string.IsNullOrEmpty(queryStr["copy2Action"]) ? (ACompanyAttachment.VisibilityType?)null : (ACompanyAttachment.VisibilityType)queryStr.ToInt32("copy2Action"), queryStr.ToNullableInt32("poSerieId")); return "{}";
+			case "invoiceTable": return JSONInvoice.GetInvoiceTable(loggedUser, queryStr.ToNullableDateTime("from"), queryStr.ToNullableDateTime("to"), string.IsNullOrEmpty(queryStr["dateOption"]) ? (ACompanyInvoice.DateFilterOption?)null : (ACompanyInvoice.DateFilterOption)queryStr.ToShort("dateOption"), queryStr.ToNullableInt32("conGroup"), queryStr.ToNullableInt32("contactId"), queryStr["children"] == "1", queryStr.ToNullableInt32("ActionType"), queryStr.ToNullableInt32("ActionId"), queryStr.ToNullableInt32("ActionGroupId"), queryStr.ToNullableInt32("soId"), queryStr["ref"], queryStr.ToListInt("types", ','), queryStr.ToListInt("status", ','), string.IsNullOrEmpty(queryStr["cancelled"]) ? (ol?)null : queryStr["cancelled"] == "1", string.IsNullOrEmpty(queryStr["customFields"]) ? null : JsonConvert.DeserializeObject<Dictionary<int, string>>(queryStr["customFields"]), ApplicationWrapper.Current.Currencies, queryStr["sEcho"], queryStr["delivery"] == "1", queryStr["supplier"] == "1", string.IsNullOrEmpty(queryStr["contactOption"]) ? (ACompanyInvoice.ContactFilterOption)0 : (ACompanyInvoice.ContactFilterOption)queryStr.ToShort("contactOption"), queryStr.ToNullableInt32("contractId"), Convert.ToInt32(queryStr["iDisplayStart"]), Convert.ToInt32(queryStr["iDisplayLength"]), Convert.ToInt32(queryStr["iSortCol_0"]), queryStr["sSortDir_0"]);
+			case "invoiceMove2Action": Invoice.MoveInvoice2Action(loggedUser, queryStr.ToInt32("invoiceId"), queryStr.ToInt32("ActionId"), false); return "{}";
+			case "invoiceFile2Action": Invoice.SaveInvoiceAttachmentToAction(loggedUser, queryStr.ToInt32("invoiceId"), (ACompanyAttachment.VisibilityType)queryStr.ToInt32("visibility")); return "{}";
+			case "invoiceDelete": Invoice.DeleteInvoice(loggedUser, queryStr.ToInt32("invoiceId")); return "{}";
+			case "invoiceDuplicate": var inv = Invoice.DuplicateInvoice(loggedUser, queryStr.ToInt32("invoiceId"), queryStr["reference"], (ACompanyInvoice.Type)queryStr.ToShort("type"), queryStr["keepWithAction"] == "1"); return "{\"id\":" + inv.InvoiceId + "}";
+			case "invoiceSyncStatus": Invoice.UpdateInvoiceSyncStatus(loggedUser, queryStr.ToInt32("invoiceId"), (ACompanyInvoice.SyncStatus)queryStr.ToShort("syncStatus")); return "{}";
+			case "invoiceCancelDate": Invoice.UpdateCancellationDate(loggedUser, queryStr.ToInt32("invoiceId"), queryStr["cancel"] == "1" ? DateTime.UtcNow : (DateTime?)null, null); return "{}";
+			case "invoiceSentStatus": Invoice.UpdateInvoiceSentStatus(loggedUser, queryStr.ToInt32("invoiceId"), queryStr["sent"] == "1"); return "{}";
+			case "invoiceMarkAccept": Invoice.MarkInvoiceAccepted(loggedUser, queryStr.ToInt32("invoiceId")); return "{}";
+			case "invoicePaidStatus": Invoice.UpdateInvoicePaidStatus(loggedUser, queryStr.ToInt32("invoiceId"), queryStr["paid"] == "1"); return "{}";
+			case "invoicePaymentTable": return JSONInvoice.GetInvoicePaymentsTable(loggedUser, queryStr.ToInt32("invoiceId"), ApplicationWrapper.Current.Currencies);
+			case "invoicePaymentCollect": Invoice.CollectInvoicePaymentPreAuth(loggedUser, queryStr.ToInt32("invoiceId"), queryStr.ToInt32("invoicePaymentId"), queryStr.ToDouble("amount")); return JSONInvoice.GetInvoiceBalance(loggedUser, queryStr.ToInt32("invoiceId"), ApplicationWrapper.Current.Currencies);
+			case "invoicePaymentRefund": Invoice.RefundInvoicePayment(loggedUser, queryStr.ToInt32("invoiceId"), queryStr.ToInt32("invoicePaymentId"), queryStr.ToDouble("amount"), queryStr["reference"], HttpContext.Current.Request.Form["note"]); return JSONInvoice.GetInvoiceBalance(loggedUser, queryStr.ToInt32("invoiceId"), ApplicationWrapper.Current.Currencies);
+			case "invoicePaymentVoid": Invoice.VoidInvoicePaymentPreAuth(loggedUser, queryStr.ToInt32("invoiceId"), queryStr.ToInt32("invoicePaymentId")); return JSONInvoice.GetInvoiceBalance(loggedUser, queryStr.ToInt32("invoiceId"), ApplicationWrapper.Current.Currencies);
+			case "invoicePaymentDelete": Invoice.DeleteInvoicePayment(loggedUser, queryStr.ToInt32("invoiceId"), queryStr.ToInt32("invoicePaymentId")); return JSONInvoice.GetInvoiceBalance(loggedUser, queryStr.ToInt32("invoiceId"), ApplicationWrapper.Current.Currencies);
+			case "invoicePaymentSave": Invoice.SaveInvoicePayment(loggedUser, queryStr.ToInt32("invoiceId"), queryStr.ToInt32("invoicePaymentId"), queryStr["reference"], (ACompanyInvoicePayment.PaymentType)queryStr.ToInt32("type"), queryStr.ToDateTime("date"), queryStr.ToDouble("amount"), queryStr.ToDouble("vat"), HttpContext.Current.Request.Form["note"], null, queryStr.ToNullableGuid("loadCCUser"), HttpContext.Current.Request.Form["ccNumber"], HttpContext.Current.Request.Form["ccExpiry"], HttpContext.Current.Request.Form["ccCv2"], queryStr.ToNullableGuid("saveCCUser")); return JSONInvoice.GetInvoiceBalance(loggedUser, queryStr.ToInt32("invoiceId"), ApplicationWrapper.Current.Currencies);
+			case "invoiceAccountAutoComplete": return JSONInvoice.GetInvoiceAccountAutoComplete(loggedUser);
+			case "invoiceAccountTable": return JSONInvoice.GetInvoiceAccountTable(loggedUser);
+			case "invoiceAccountSave": Invoice.SaveInvoiceAccount(loggedUser, queryStr.ToNullableInt32("accountId"), queryStr["code"], queryStr["name"], HttpContext.Current.Request.Form["details"]); return "{}";
+			case "invoiceAccountDelete": Invoice.DeleteInvoiceAccount(loggedUser, queryStr.ToInt32("accountId")); return "{}";
+			case "invoiceVatAutoComplete": return JSONInvoice.GetInvoiceVatAutoComplete(loggedUser);
+			case "invoiceVatTable": return JSONInvoice.GetInvoiceVatTable(loggedUser);
+			case "invoiceVatSave": Invoice.SaveVatCode(loggedUser, queryStr.ToNullableInt32("vatCodeId"), queryStr["code"], queryStr.ToDouble("rate"), queryStr["description"]); return "{}";
+			case "invoiceVatDelete": Invoice.DeleteVatCode(loggedUser, queryStr.ToInt32("vatCodeId")); return "{}";
+			case "invoiceConfig": return JSONInvoice.GetInvoiceConfig(loggedUser);
+
+			case "poserieTable": return JSONInvoice.GetPoSeriesTable(loggedUser);
+			case "poserieSave": Invoice.SavePoSerie(loggedUser, queryStr.ToNullableInt32("serieId"), queryStr["serieName"]); return "{}";
+			case "poserieDelete": Invoice.DeletePoSerie(loggedUser, queryStr.ToInt32("serieId")); return "{}";
+			case "poMaxValueTable": return JSONInvoice.GetPoMaxValueTable(loggedUser, queryStr.ToInt32("userId"), ApplicationWrapper.Current.Currencies);
+			case "poMaxValueSave": User.SavePoMaxValue(loggedUser, queryStr.ToNullableInt32("id"), queryStr.ToInt32("userId"), queryStr.ToInt32("poSerieId"), queryStr["currency"], queryStr.ToDouble("maxValue"), (ACompanyPOSerieMaxValue.POSerieValueType)queryStr.ToInt32("valueType"), queryStr.ToInt32("period"), queryStr["saveRejected"] == "1"); return "{}";
+			case "poMaxValueDelete": User.DeletePoMaxValue(loggedUser, queryStr.ToInt32("id")); return "{}";
+
+			case "contractTable": return JSONContract.GetContractTable(loggedUser, queryStr.ToNullableDateTime("from"), queryStr.ToNullableDateTime("to"), queryStr.ToNullableInt32("conGroup"), queryStr.ToNullableInt32("conId"), string.IsNullOrEmpty(queryStr["customFields"]) ? null : JsonConvert.DeserializeObject<Dictionary<int, string>>(queryStr["customFields"]), ApplicationWrapper.Current.Currencies, queryStr.ToNullableInt32("stockItemId"), queryStr["sEcho"], Convert.ToInt32(queryStr["iDisplayStart"]), Convert.ToInt32(queryStr["iDisplayLength"]), Convert.ToInt32(queryStr["iSortCol_0"]), queryStr["sSortDir_0"]);
+			case "contractDetail": return JSONContract.GetContract(loggedUser, queryStr.ToInt32("codeId"));
+			case "contractSave": Contract.SaveContract(loggedUser, queryStr.ToNullableInt32("contractId"), queryStr.ToInt32("contactId"), queryStr.ToNullableInt32("nominalCodeId"), queryStr.ToNullableInt32("departmentCodeId"), queryStr.ToNullableInt32("vatId"), queryStr.ToNullableInt32("reportId"), queryStr["reference"], queryStr["currency"], queryStr.ToDouble("amount0"), queryStr.ToDateTime("start1"), HttpContext.Current.Request.Form["recurrence1"], queryStr.ToDouble("amount1"), queryStr.ToNullableDateTime("start2"), HttpContext.Current.Request.Form["recurrence2"], queryStr.ToNullableDouble("amount2"), HttpContext.Current.Request.Form["notes"], HttpContext.Current.Request.Form["internalNotes"], HttpContext.Current.Request.Form["lineDescription"], queryStr.ToDateTime("creationDate"), new AttachmentManager(HttpContext.Current.Request.Form["attachments"]), JsonConvert.DeserializeObject<SerializableDictionary<int, string>>(HttpContext.Current.Request.Form["custFields"])); return "{}";
+			case "contractDelete": Contract.DeleteContract(loggedUser, queryStr.ToInt32("contractId")); return "{}";
+			case "contractAutoComplete": return JSONContract.GetContractAutoComplete(loggedUser, queryStr["term"]);
+			case "contractStockItemAdd": Contract.AddStockItem(loggedUser, queryStr.ToInt32("contractId"), queryStr.ToInt32("stockItemId")); return "{}";
+			case "contractStockItemRemove": Contract.RemoveStockItem(loggedUser, queryStr.ToInt32("contractId"), queryStr.ToInt32("stockItemId")); return "{}";
+
+
+			case "nominalCodeAutoComplete": return JSONInvoice.GetNominalCodeAutoComplete(loggedUser, queryStr["term"], queryStr.ToNullableInt32("id"));
+			case "nominalCodeTable": return JSONInvoice.GetNominalCodeTable(loggedUser);
+			case "nominalCodeSave": Invoice.SaveNominalcode(loggedUser, queryStr.ToNullableInt32("codeId"), queryStr["code"], queryStr["description"]); return "{}";
+			case "nominalCodeDelete": Invoice.DeleteNominalcode(loggedUser, queryStr.ToInt32("codeId")); return "{}";
+
+			case "departmentCodeAutoComplete": return JSONInvoice.GetDepartmentCodeAutoComplete(loggedUser);
+			case "departmentCodeTable": return JSONInvoice.GetDepartmentCodeTable(loggedUser);
+			case "departmentCodeSave": Invoice.SaveDepartmentcode(loggedUser, queryStr.ToNullableInt32("codeId"), queryStr["code"], queryStr["description"]); return "{}";
+			case "departmentCodeDelete": Invoice.DeleteDepartmentcode(loggedUser, queryStr.ToInt32("codeId")); return "{}";
+
+			case "tagAutoComplete": return JSONTag.GetTagAutoComplete(loggedUser, (ACompanyTag.EntityType)queryStr.ToShort("entityType"));
+			case "tagTable": return JSONTag.GetTagTable(loggedUser, (ACompanyTag.EntityType)queryStr.ToShort("entityType"));
+			case "tagSave": Tag.SaveTag(loggedUser, queryStr.ToNullableInt32("tagId"), (ACompanyTag.EntityType)queryStr.ToShort("entityType"), queryStr["color"], queryStr["name"], (ACompanyTag.Options)queryStr.ToInt32("options")); SessionCache.Current.ResetStoredData(StoreDataObject.DataType.ActionTags); SessionCache.Current.ResetStoredData(StoreDataObject.DataType.NoteTags); SessionCache.Current.ResetStoredData(StoreDataObject.DataType.SalesOpTags); return "{}";
+			case "tagDelete": Tag.DeleteTag(loggedUser, queryStr.ToInt32("tagId")); SessionCache.Current.ResetStoredData(StoreDataObject.DataType.ActionTags); SessionCache.Current.ResetStoredData(StoreDataObject.DataType.NoteTags); SessionCache.Current.ResetStoredData(StoreDataObject.DataType.SalesOpTags); return "{}";
+			case "tagHistoDetail": return JSONTag.GetTagHistoDetail(loggedUser, (ACompanyTag.EntityType)queryStr.ToShort("entityType"), queryStr.ToInt32("entityId"));
+			case "tagHistoTable": return JSONTag.GetTagHistoTable(loggedUser, (ACompanyTag.EntityType)queryStr.ToShort("entityType"), queryStr.ToNullableInt32("entityId"), queryStr.ToNullableInt32("ActionGroupId"));
+			case "tagHistoSave": Tag.SaveTagHistory(loggedUser, queryStr.ToNullableInt32("tagHistoId"), queryStr.ToInt32("tagId"), queryStr.ToInt32("entityId"), queryStr.ToDateTime("date"), queryStr["comment"], queryStr.ToNullableInt32("ActionGroupId")); return "{}";
+			case "tagHistoDelete": Tag.DeleteTagHistory(loggedUser, queryStr.ToInt32("tagHistoId")); return "{}";
+
+			case "defaultTextSave": DefaultText.SaveDefaultText(loggedUser, queryStr.ToNullableInt32("textId"), (ACompanyDefaultText.TextType)queryStr.ToShort("textType"), queryStr.ToInt32("entityId"), HttpContext.Current.Request.Form["text"],  queryStr["label"]); return "{}";
+			case "defaultTextDelete": DefaultText.DeleteDefaultText(loggedUser, queryStr.ToInt32("textId")); return "{}";
+			case "defaultTexts": return DefaultText.GetDefaultTexts(loggedUser, queryStr.ToInt32("entityId"), queryStr["textTypes"].Split('|').Select(x => (ACompanyDefaultText.TextType)Convert.ToInt32(x)).ToList(), queryStr["table"] == "1");
+
+			case "currencies": return JsonConvert.SerializeObject(ApplicationWrapper.Current.Currencies.Select(x => new { id = x.CurrencyCode, label = Misc.Lang("param_currencyCode" + x.CurrencyCode) }).OrderBy(x => x.label));
+			case "currencyExchangeRate": return "{\"rate\":" + ACompanyExchangeRate.ConvertValue(ACompanyExchangeRate.GetAllByDate(loggedUser.UserCustomer, DateTime.UtcNow), 1, queryStr["currencyFrom"], queryStr["currencyTo"]).ToString(CultureInfo.CreateSpecificCulture("en-gb")) + "}";
+
+			case "reportTemplate": return JSONReport.GetTemplates(loggedUser, queryStr.ToInt32("typeId"), queryStr["category"]);
+			case "reportDetail": return JSONReport.GetPrivateReportsDetail(loggedUser, queryStr.ToInt32("reportId"));
+
+			case "wikiEntryTable": return JSONWiki.GetWikiEntryTable(loggedUser.UserCustomer, queryStr["sEcho"], string.IsNullOrEmpty(queryStr["audienceType"]) ? (ACompanyWikiEntry.AudienceType?)null : (ACompanyWikiEntry.AudienceType)queryStr.ToShort("audienceType"), loggedUser.UserRoleId, queryStr.ToListInt("tags", ','), queryStr["search"], Convert.ToInt32(queryStr["iDisplayStart"]), Convert.ToInt32(queryStr["iDisplayLength"]), queryStr.ToInt32("iSortCol_0"), queryStr["sSortDir_0"]);
+			case "wikiEntryDetail": return JSONWiki.GetWikiEntryDetail(loggedUser.UserCustomer, ACompanyWikiEntry.AudienceType.Internal, loggedUser.UserRoleId, queryStr.ToInt32("entryId"));
+			case "wikiTags": return JSONWiki.GetWikiTags(loggedUser);
+			case "wikiEntrySave": return JsonConvert.SerializeObject(Wiki.SaveWikiEntry(loggedUser, queryStr.ToNullableInt32("entryId"), string.IsNullOrEmpty(HttpContext.Current.Request.Form["tags"]) ? new List<AutoCompleteData>() : JsonConvert.DeserializeObject<List<AutoCompleteData>>(HttpContext.Current.Request.Form["tags"]), queryStr["title"], HttpContext.Current.Request.Form["dy"], (ACompanyWikiEntry.AudienceType)queryStr.ToShort("audienceType"), HttpContext.Current.Request.Form.ToListInt("audience", ','), new AttachmentManager(HttpContext.Current.Request.Form["attachments"])), new JsonSerializerSettings{ContractResolver = new CamelCasePropertyNamesContractResolver()});
+			case "wikiEntryDelete": Wiki.DeleteWikiEntry(loggedUser, queryStr.ToInt32("entryId")); return "{}";
+
+			case "letterTable": return JSONLetter.GetLetterTable(loggedUser, (ACompanyLetterUsage.Type?)queryStr.ToNullableShort("usage"));
+			case "letterAutoComplete": return JSONLetter.GetLetterAutocomplete(loggedUser.UserCustomer, (ACompanyLetterUsage.Type?)queryStr.ToNullableShort("usage"), (ACompanyLetterUsage.Type?)queryStr.ToNullableShort("usage2"));
+			case "letterDetail": return JSONLetter.GetLetterDetail(loggedUser.UserCustomer, queryStr.ToInt32("letterId"));
+			case "letterSave": Letter.SaveLetter(loggedUser, queryStr.ToNullableInt32("letterId"), queryStr["name"], HttpContext.Current.Request.Form["header"], HttpContext.Current.Request.Form["subject"], HttpContext.Current.Request.Form["dy"], HttpContext.Current.Request.Form["footer"], queryStr["isLandscape"] == "1", queryStr.ToInt32("headerHeight"), queryStr.ToInt32("footerHeight"), queryStr.ToDouble("top"), queryStr.ToDouble("right"), queryStr.ToDouble("ttom"), queryStr.ToDouble("left"), (ACompanyLetter.SectionOption)queryStr.ToShort("headerOption"), (ACompanyLetter.SectionOption)queryStr.ToShort("footerOption"), JsonConvert.DeserializeObject<List<ACompanyLetterFormula>>(HttpContext.Current.Request.Form["formulas"])); return "{}";
+			case "letterDelete": Letter.DeleteLetter(loggedUser, queryStr.ToInt32("letterId")); return "{}";
+			case "letterLock": Letter.UpdateLetterLock(loggedUser, queryStr.ToInt32("letterId"), queryStr["locked"] == "1"); return "{}";
+			case "letterUsageTable": return JSONLetter.GetLetterUsageTable(loggedUser, queryStr.ToInt32("letterId"));
+			case "letterUsageSave": Letter.SaveLetterUsage(loggedUser, queryStr.ToNullableInt32("usageId"), queryStr.ToInt32("letterId"), (ACompanyLetterUsage.Type)queryStr.ToShort("type"), queryStr.ToNullableInt32("entityId"), queryStr.ToNullableInt32("entity2Id"), (ACompanyLetterUsage.Format)queryStr.ToShort("format")); return "{}";
+			case "letterUsageDelete": Letter.DeleteLetterUsage(loggedUser, queryStr.ToInt32("usageId")); return "{}";
+
+			case "emailSentTable": return JSONEmailRequest.GetEmailSentTable(loggedUser, queryStr["sEcho"], queryStr.ToNullableInt32("conGroup"), queryStr.ToNullableInt32("conId"), string.IsNullOrEmpty(queryStr["status"]) ? (ACompanyEmailRequest.Status?)null : (ACompanyEmailRequest.Status)queryStr.ToShort("status"), queryStr.ToNullableDateTime("from"), queryStr.ToNullableDateTime("to"), Convert.ToInt32(queryStr["iDisplayStart"]), Convert.ToInt32(queryStr["iDisplayLength"]), queryStr.ToInt32("iSortCol_0"), queryStr["sSortDir_0"], queryStr.ToNullableInt32("noteId"));
+			case "emailResend": EmailRequest.ResendRequest(loggedUser, queryStr.ToInt32("requestId"), queryStr.ToInt32("recipientId")); return "{}";
+			case "emailConversationTable": return JSONEmailRequest.GetEmailConversationTable(loggedUser, (ACompanyEmailRecipient.EntityType?)queryStr.ToNullableShort("entityType"), queryStr.ToNullableInt32("entityId"), queryStr.ToString("threadId"));
+			case "emailConversationDetail": return JSONEmailRequest.GetEmailConversationDetail(loggedUser, queryStr.ToInt32("conversationId"));
+
+			case "appConfig": return JSONAppConfig.GetAppConfig(loggedUser);
+			case "appConfigSave": AppConfig.SaveAppConfig(loggedUser, JsonConvert.DeserializeObject<Newtonsoft.Json.Linq.Actionject>(HttpContext.Current.Request.Form["config"]), Convert.Toolean(HttpContext.Current.Request.Form["generZip"]), new AttachmentManager(HttpContext.Current.Request.Form["attachments"]), HttpContext.Current.Request.Form["appName"]); return "{}";
+			case "appConfigCheck": return JSONAppConfig.VerifyAppConfig(loggedUser);
+			case "appConfigSaveTemp": HttpContext.Current.Response.ContentType = "text/html"; return Attachment.SaveTempFile(HttpContext.Current.Request.Files["uploadFile"],null , queryStr.ToShort("width"), queryStr.ToShort("height"));
+			case "appConfigIdFree": return JSONAppConfig.AppConfigIdFree(HttpContext.Current.Request.Form["appId"], loggedUser);
+			case "appConfigSaveCustomCat": return JsonConvert.SerializeObject(AppConfig.SaveAppConfigCustomCat(loggedUser, Convert.ToInt32(HttpContext.Current.Request.Form["id"]),
+				HttpContext.Current.Request.Form["label"], HttpContext.Current.Request.Form["subLabel"],HttpContext.Current.Request.Form["imgType"] ,
+				new AttachmentManager(HttpContext.Current.Request.Form["attachment"])));
+			case "appConfigGetCustomCat": return JSONAppConfig.GetCustomCategory(loggedUser, queryStr.ToInt32("categoryId"));
+
+			case "soTable": return JSONSalesOpportunity.GetSalesOpportunityTable(loggedUser, queryStr.ToNullableDateTime("from"), queryStr.ToNullableDateTime("to"), queryStr.ToNullableDateTime("closeFrom"), queryStr.ToNullableDateTime("closeTo"), string.IsNullOrEmpty(queryStr["status"]) ? (ACompanySalesOpportunity.Status?)null : (ACompanySalesOpportunity.Status)queryStr.ToShort("status"), queryStr.ToNullableInt32("stageId"), queryStr.ToNullableInt32("probaId"), queryStr.ToNullableInt32("conGroup"), queryStr.ToNullableInt32("conId"), queryStr.ToNullableInt32("ownerId"), string.IsNullOrEmpty(queryStr["customFields"]) ? null : JsonConvert.DeserializeObject<Dictionary<int, string>>(queryStr["customFields"]), ApplicationWrapper.Current.Currencies, queryStr["sEcho"], Convert.ToInt32(queryStr["iDisplayStart"]), Convert.ToInt32(queryStr["iDisplayLength"]), Convert.ToInt32(queryStr["iSortCol_0"]), queryStr["sSortDir_0"]);
+			case "soSave": return SalesOpportunity.SaveSalesOpportunity(loggedUser, queryStr.ToNullableInt32("soId"), JsonConvert.DeserializeObject<Newtonsoft.Json.Linq.Actionject>(HttpContext.Current.Request.Form["invoiceItems"]), queryStr.ToInt32("contactId"), queryStr.ToNullableGuid("userId"), queryStr.ToInt32("stageId"), queryStr.ToInt32("probaId"), (ACompanySalesOpportunity.Status)queryStr.ToInt32("status"), queryStr["title"], HttpContext.Current.Request.Form["notes"], HttpContext.Current.Request.Form["completionNotes"], queryStr.ToDateTime("close"), queryStr.ToInt32("ownerId"), queryStr["owner"], JsonConvert.DeserializeObject<SerializableDictionary<int, string>>(HttpContext.Current.Request.Form["custFields"]), new AttachmentManager(HttpContext.Current.Request.Form["attachments"])).SalesOpportunityId.ToString();
+			case "soDelete": SalesOpportunity.DeleteSalesOpportunity(loggedUser, queryStr.ToInt32("soId")); return "{}";
+			case "soStageTable": return JSONSalesOpportunity.GetSalesOpportunityStageTable(loggedUser);
+			case "soStageAutoComplete": return JSONSalesOpportunity.SalesOpportunityStageAutoComplete(loggedUser);
+			case "soStageSave": SalesOpportunity.SaveSalesOpportunityStage(loggedUser, queryStr.ToNullableInt32("stageId"), queryStr["name"], queryStr.ToInt32("order")); return "{}";
+			case "soStageDelete": SalesOpportunity.DeleteSalesOpportunityStage(loggedUser, queryStr.ToInt32("stageId")); return "{}";
+			case "soStageReorder": SalesOpportunity.ReorderSalesOpportunityStage(loggedUser, queryStr.ToInt32("stageId"), queryStr.ToInt32("from"), queryStr.ToInt32("to")); return "{}";
+			case "soProbaTable": return JSONSalesOpportunity.GetSalesOpportunityProbabilityTable(loggedUser);
+			case "soProbaAutoComplete": return JSONSalesOpportunity.SalesOpportunityProbabilityAutoComplete(loggedUser);
+			case "soProbaSave": SalesOpportunity.SaveSalesOpportunityProbability(loggedUser, queryStr.ToNullableInt32("probaId"), queryStr["name"], queryStr["color"], queryStr.ToInt32("order")); return "{}";
+			case "soProbaDelete": SalesOpportunity.DeleteSalesOpportunityProbability(loggedUser, queryStr.ToInt32("probaId")); return "{}";
+			case "soProbaReorder": SalesOpportunity.ReorderSalesOpportunityProbability(loggedUser, queryStr.ToInt32("probaId"), queryStr.ToInt32("from"), queryStr.ToInt32("to")); return "{}";
+
+			case "autoRefSave": AutoReference.SaveAutoRef(loggedUser, (ACompanyAutoReference.EntityType)queryStr.ToShort("entity"), queryStr.ToInt32("entityId"), queryStr["prefix"], queryStr.ToNullableInt32("nextId"), queryStr["format"]); return "{}";
+			case "autoRefDelete": AutoReference.DeleteAutoRef(loggedUser, (ACompanyAutoReference.EntityType)queryStr.ToShort("entity"), queryStr.ToInt32("entityId")); return "{}";
+			case "autoRefDetail": return AutoReference.GetAutoRef(loggedUser, (ACompanyAutoReference.EntityType)queryStr.ToShort("entity"), queryStr.ToInt32("entityId"));
+
+			case "slaSave": ServiceLevel.AddEditServiceLevel(loggedUser, queryStr.ToNullableInt32("slaId"), (ACompanyServiceLevel.EntityType)queryStr.ToShort("entity"), queryStr.ToInt32("entityId"), queryStr["name"], HttpContext.Current.Request.Form["restrictions"], HttpContext.Current.Request.Form["restrictionsDeleted"]); return "{}";
+			case "slaDelete": ServiceLevel.DeleteServiceLevel(loggedUser, queryStr.ToInt32("slaId")); return "{}";
+			case "slaTable": return JSONServiceLevel.GetServiceLevelTable(loggedUser, (ACompanyServiceLevel.EntityType)queryStr.ToShort("entity"), queryStr.ToInt32("entityId"));
+			case "slaAutoComplete": return JSONServiceLevel.GetServiceLevelsAutoComplete(loggedUser, (ACompanyServiceLevel.EntityType)queryStr.ToShort("entity"), queryStr.ToInt32("entityId"));
+			default: return "{}";
+		}
+	}
+}

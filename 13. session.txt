@@ -1,0 +1,29 @@
+public class SessionWrapper
+{
+    private SessionWrapper() { }
+    
+    private string _logo;
+    public string Logo { get { if (string.IsNullOrEmpty(_logo)) _logo = LoadLogo(ThisUser); return _logo; } set { _logo = value; } }
+
+    private ACompanyThisUser _ThisUser;
+    public ACompanyThisUser ThisUser { get { return _ThisUser; } set { _ThisUser = value; _logo = null; } }
+
+    private List<short> _columns;
+    public List<short> columns { get { return _columns ?? loadcolumns(); } }
+
+        public static SessionWrapper Current
+    {
+        get
+        {
+            var session = (SessionWrapper)null;
+            try{
+                session = (SessionWrapper)HttpContext.Current.Session["__MySession__"];
+            } catch (Exception) { }
+            if (session == null) {
+                session = new SessionWrapper();
+                HttpContext.Current.Session["__MySession__"] = session;
+            }
+            return session;
+        }
+    }
+}

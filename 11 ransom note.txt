@@ -1,0 +1,26 @@
+Can the ransom note (note) be made from the letters present in the newspaper (blob)?
+
+public class RansomNoteProblem {
+public static void main (String args[]){
+String blob = "thisisanothwllowllqend";
+String note = "thisisanotex";
+System.out.println(validateLetterCreation(blob,note));
+}
+public static boolean validateLetterCreation(String dict, String note){
+int charArray[] = new int[256];
+for(int i=0;i<dict.length();i++){
+int charValue = (int)dict.charAt(i);
+charArray[charValue]++;
+}
+for(int i=0;i<note.length();i++){
+int charValue = note.charAt(i);
+if(charArray[charValue]<=0){
+return false;
+}
+else {
+charArray[charValue]--;
+}
+}
+return true;
+}
+}

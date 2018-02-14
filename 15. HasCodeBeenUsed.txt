@@ -1,0 +1,33 @@
+        public ActionResult HasCodeBeenUsed(string customerCode)
+        {
+            var token = GetToken();
+            if (token == null) return Unauthorized();
+
+            var customerName = "";
+            while (true)
+            {
+                var matches = searchService.Search(token, customerCode, "");
+                var match = matches.FirstOrDefault();
+
+                if (match == null)
+                {
+                    if (customerName == "")
+                        // This is the first code we have tried and it's good.
+                        return Json("");
+                    else
+                        // The original code failed,  but this one is ok
+                        return Json(customerName + $" (Use {customerCode})");
+                }
+                else
+                {
+                    if (customerName == "")
+                        // The supplied code has already been used
+                        customerName = match.CustomerName;
+
+		    // Increase the number on the end of the customer code by 1 and then try that
+                    var numericPart = int.Parse(customerCode.Substring(5));
+                    var nextOne = numericPart+1;
+                    customerCode = customerCode.Substring(0, 5) + nextOne.ToString("000");
+                }
+            }
+        }

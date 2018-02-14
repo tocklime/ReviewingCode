@@ -1,0 +1,19 @@
+static const int kDaysInMonth[13] = {
+  0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
+};
+
+bool ValidateDateTime(const DateTime& time) {
+  if (time.year < 1 || time.year > 9999 ||
+      time.month < 1 || time.month > 12 ||
+      time.day < 1 || time.day > 31 ||
+      time.hour < 0 || time.hour > 23 ||
+      time.minute < 0 || time.minute > 59 ||
+      time.second < 0 || time.second > 59) {
+    return false;
+  }
+  if (time.month == 2 && IsLeapYear(time.year)) {
+    return time.month <= kDaysInMonth[time.month] + 1;
+  } else {
+    return time.month <= kDaysInMonth[time.month];
+  }
+}
